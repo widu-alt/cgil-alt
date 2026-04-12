@@ -116,6 +116,8 @@ public:
     void visit(IdentifierExpr* node) override;
     void visit(CallExpr*       node) override;
     void visit(AddressOfExpr*  node) override;
+    void visit(IndexExpr*      node) override;
+    void visit(StructInitExpr* node) override;
 
 private:
     // =========================================================================

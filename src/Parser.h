@@ -144,6 +144,8 @@ private:
     // builds a CallExpr. The '(' has already been consumed before this is called.
     std::unique_ptr<Expr>          parseCallExpr(std::unique_ptr<Expr> callee);
 
+    std::unique_ptr<StructInitExpr> parseStructInitExpr(Token typeName, Token stanceName);
+
     // Returns the infix binding power (precedence level) of a token type.
     // Returns 0 for tokens that are not infix operators (stops the climb).
     // Levels match the Cgil spec v1.7 operator precedence table exactly.

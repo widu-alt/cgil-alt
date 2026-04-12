@@ -374,7 +374,9 @@ void SemanticAnalyzer::visit(ForeStmt* node) {
     loopDepth--;
 
     // Check the increment expression (e.g., i = i + 1).
-    evaluate(node->increment.get());
+    if (node->incValue) {
+        evaluate(node->incValue.get());
+    }
 
     symbols.exitScope(); // Loop variable goes out of scope
 }
@@ -656,26 +658,25 @@ void SemanticAnalyzer::visit(AssignStmt* node) {
 void SemanticAnalyzer::visit(VarDeclStmt* node) {
     if (isPassOne) return;
 
-    // 1. Ensure the type actually exists
     auto varType = resolveType(node->typeToken);
 
-    // 2. Evaluate the right side (if it exists) to type-check it
+    std::string initialStance = "";
+
     if (node->initializer) {
         auto initType = evaluate(node->initializer.get());
         
-        // V1.5 TODO: Add strict type-compatibility checking here!
-        // Right now, it evaluates it to catch errors inside the expression, 
-        // but it will blindly allow mark32 to be shoved into a mark16 slot.
-        (void)initType; 
+        // THE FIX: If initialized with a stance-prefixed struct, remember the stance!
+        if (auto* structInit = dynamic_cast<StructInitExpr*>(node->initializer.get())) {
+            initialStance = structInit->stanceName.lexeme;
+        }
     }
 
-    // 3. Register it in the current scope
-    // (name, type, isOwned, stanceName, isHardware)
+    // Register it in the current scope with the correct initial stance
     symbols.declare(
         node->name.lexeme, 
         varType, 
         false, 
-        "", 
+        initialStance, 
         false
     );
 }
@@ -798,12 +799,22 @@ void SemanticAnalyzer::visit(PostfixExpr* node) {
               "The expression before '?' does not return an Omen.");
     }
 
-    // Unwrap the success type. If successType is set, use it.
-    // Otherwise fall back to a generic primitive (V1 approximation).
+    // RESOLVEDOMENTYPE PATCH:
+    // Store the full Omen TypeInfo on the AST node so CodeGen can:
+    //   a) Emit the correct concrete typedef name for _tmp (not __auto_type fallback)
+    //   b) Detect abyss Omens where __value does not exist in the union
+    //   c) Emit the correct early-return path in the destined goto chain
+    // This is the fix for the Type Erasure bug identified in the pre-Phase-3 audit.
+    node->resolvedOmenType = operandType;
+
+    // Unwrap: the ? operator produces the SUCCESS type of the Omen.
     if (operandType->successType) {
         currentExprType = operandType->successType;
     } else {
-        currentExprType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::PRIMITIVE, "scroll"});
+        // Omen with no successType populated — produce a generic primitive.
+        // This happens when the spell's return type was not fully resolved.
+        // V1.5 TODO: Ensure all Omen types are fully populated with successType.
+        currentExprType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::PRIMITIVE, "soul16"});
     }
 }
 
@@ -1124,4 +1135,74 @@ void SemanticAnalyzer::visit(AddressOfExpr* node) {
     // Regular address-of: &my_disk -> pointer to the variable.
     // V1: Return the operand's type. V1.5: wrap in a pointer TypeInfo.
     currentExprType = operandType;
+}
+
+// Array subscript: target[index]
+// Validates:
+//   1. The target is an array-like type (deck variable, leyline of array type).
+//   2. The index is an integer-compatible type.
+//   3. Returns the element type of the array.
+//
+// V1: Type checking is simplified — we evaluate both sides and return mark16.
+// V1.5 TODO: Track element types on array TypeInfos and return the correct type.
+void SemanticAnalyzer::visit(IndexExpr* node) {
+    if (isPassOne) return;
+
+    auto targetType = evaluate(node->target.get());
+    auto indexType  = evaluate(node->index.get());
+
+    // V1: Accept any index type (like C does for array subscripts).
+    // V1.5 TODO: Enforce index is mark16, soul16, or addr.
+    (void)indexType;
+
+    // V1: Return mark16 as the element type — conservative safe default.
+    // V1.5 TODO: Return targetType->elementType when array TypeInfo carries it.
+    currentExprType = typeRegistry.count("mark16")
+        ? typeRegistry["mark16"]
+        : std::make_shared<TypeInfo>(TypeInfo{TypeKind::PRIMITIVE, "mark16"});
+}
+
+// Struct/sigil initializer: Device:Idle { device_id: 0, error_code: 0, flags: 0 }
+//
+// Validates:
+//   1. The type name refers to a declared sigil or legion.
+//   2. If a stance prefix is present, the stance belongs to that sigil.
+//   3. All field names exist on the sigil (V1.5 TODO).
+//   4. All field values evaluate without error.
+//
+// Produces: the sigil's TypeInfo as the expression type.
+void SemanticAnalyzer::visit(StructInitExpr* node) {
+    if (isPassOne) return;
+
+    // 1. Resolve the type name.
+    auto typeIt = typeRegistry.find(node->typeName.lexeme);
+    if (typeIt == typeRegistry.end()) {
+        error(node->typeName,
+              "Unknown type '" + node->typeName.lexeme + "' in struct initializer. "
+              "Only declared sigil and legion types can be initialized with { }.");
+    }
+
+    auto sigilType = typeIt->second;
+
+    if (sigilType->kind != TypeKind::SIGIL) {
+        error(node->typeName,
+              "'" + node->typeName.lexeme + "' is not a sigil or legion type. "
+              "Struct initializer { } syntax is only valid for sigil and legion types.");
+    }
+
+    // 2. Validate stance prefix if present.
+    if (!node->stanceName.lexeme.empty()) {
+        // V1: We trust the stance name is valid (Parser consumed it as an IDENT).
+        // V1.5 TODO: Look up the stanceMap for this sigil and verify the stance exists.
+    }
+
+    // 3. Evaluate all field initializer expressions.
+    // V1: We don't validate field names against the sigil definition (V1.5 TODO).
+    // We do evaluate initializers to catch type errors and ownership moves inside them.
+    for (auto& field : node->fields) {
+        evaluate(field.value.get());
+    }
+
+    // The expression type is the sigil type itself.
+    currentExprType = sigilType;
 }

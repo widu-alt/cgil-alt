@@ -244,23 +244,16 @@ void CodeGenVisitor::visit(LegionDecl* node) {
 //        so portline info is populated before PROTOTYPES and IMPLEMENTATIONS need it.
 void CodeGenVisitor::visit(HardwareDecl* node) {
     if (currentPhase != Phase::TYPES) return;
-
     if (!node->isPortline) {
-        // leyline (MMIO): emit volatile pointer global.
-        // This MUST appear before any function that references it.
-        // By emitting in TYPES phase, it precedes all prototypes and bodies.
         std::string cType = getCType(node->type);
         emitLine("// leyline " + node->name.lexeme + " @ " + node->address.lexeme);
-        emitLine("volatile " + cType + "* const " + node->name.lexeme +
-                 " = (volatile " + cType + "*)" + node->address.lexeme + ";");
+        // Emits a C macro: #define vga_buffer (*(volatile uint16_t *)0xB8000)
+        emitLine("#define " + node->name.lexeme + " (*(volatile " + cType + " *)" + node->address.lexeme + ")");
         emitLine("");
     } else {
-        // portline (PIO): store address and type, emit comment.
-        // The actual inb/inw/outb/outw asm is emitted at usage sites.
         portlineAddressMap[node->name.lexeme]  = node->address.lexeme;
         portlineTypeMap[node->name.lexeme]     = node->type.lexeme;
-        emitLine("// portline " + node->name.lexeme + " @ " +
-                 node->address.lexeme + " (reads/writes emit inline asm)");
+        emitLine("// portline " + node->name.lexeme + " @ " + node->address.lexeme + " (reads/writes emit inline asm)");
         emitLine("");
     }
 }
@@ -511,6 +504,10 @@ void CodeGenVisitor::visit(SpellDecl* node) {
         returnTypeStr = "void";
     } else {
         returnTypeStr = getCType(node->returnTypes[0].typeToken);
+        // THE FIX: Append '*' if the return type is a pointer
+        if (node->returnTypes[0].isPointer) {
+            returnTypeStr += "*";
+        }
     }
 
     // Build the full signature string.
@@ -525,12 +522,17 @@ void CodeGenVisitor::visit(SpellDecl* node) {
 
     signature += returnTypeStr + " " + node->name.lexeme + "(";
 
-    for (size_t i = 0; i < node->params.size(); ++i) {
-        const auto& p = node->params[i];
-        signature += getCType(p.type);
-        if (p.isPointer) signature += "*";
-        signature += " " + p.name.lexeme;
-        if (i < node->params.size() - 1) signature += ", ";
+    // THE FIX: GCC requires ISRs to take an irq_frame argument
+    if (node->isWarden) {
+        signature += "void* __irq_frame"; 
+    } else {
+        for (size_t i = 0; i < node->params.size(); ++i) {
+            const auto& p = node->params[i];
+            signature += getCType(p.type);
+            if (p.isPointer) signature += "*";
+            signature += " " + p.name.lexeme;
+            if (i < node->params.size() - 1) signature += ", ";
+        }
     }
     signature += ")";
 
@@ -770,22 +772,33 @@ void CodeGenVisitor::visit(YieldStmt* node) {
     if (currentPhase != Phase::IMPLEMENTATIONS) return;
 
     if (node->values.empty()) {
-        if (inDestinedSpell) emitLine("goto __destined_" + std::to_string(globalDestinedCounter - (int)currentDestinedBlocks.size()) + ";");
-        else emitLine("return;");
+        if (inDestinedSpell) {
+            int lastDeclared = globalDestinedCounter + (int)currentDestinedBlocks.size() - 1;
+            emitLine("goto __destined_" + std::to_string(lastDeclared) + ";");
+        } else {
+            emitLine("return;");
+        }
         return;
     }
 
-    // Helper to emit a value, automatically wrapping it in an Omen struct if necessary
     auto emitYieldValue = [&](Expr* val, bool isOmen) {
         if (isOmen) {
+            std::string omenTypeStr = currentReturnTypeName;
+            if (currentSpell->returnTypes.size() > 1) {
+                omenTypeStr = getOmenTypeName(currentSpell->returnTypes[1].typeToken.lexeme, currentSpell->omenErrorType.lexeme);
+            }
+
             bool isRuin = false;
             if (auto* call = dynamic_cast<CallExpr*>(val)) {
                 if (auto* id = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
                     if (id->token.lexeme == "ruin") isRuin = true;
                 }
             }
+            
+            // THE FIX: Explicit struct casting required by GCC C99
+            emit("(" + omenTypeStr + ")");
             if (isRuin) {
-                val->accept(*this); // already emits { .__is_ruin = 1 ... }
+                val->accept(*this);
             } else {
                 emit("{ .__is_ruin = 0, .__value = ");
                 val->accept(*this);
@@ -814,7 +827,7 @@ void CodeGenVisitor::visit(YieldStmt* node) {
     emit(";\n");
 
     if (inDestinedSpell) {
-        int lastDeclared = (globalDestinedCounter - (int)currentDestinedBlocks.size()) + (int)currentDestinedBlocks.size() - 1;
+        int lastDeclared = globalDestinedCounter + (int)currentDestinedBlocks.size() - 1;
         emitLine("goto __destined_" + std::to_string(lastDeclared) + ";");
     }
 }
@@ -882,7 +895,13 @@ void CodeGenVisitor::visit(ForeStmt* node) {
     emit("; ");
     node->condition->accept(*this);
     emit("; ");
-    node->increment->accept(*this);
+    if (node->increment) {
+        node->increment->accept(*this);
+        if (node->incValue) {
+            emit(" = ");
+            node->incValue->accept(*this);
+        }
+    }
     emit(") {\n");
     indentLevel++;
     for (auto& s : node->body->statements) s->accept(*this);
@@ -944,46 +963,38 @@ void CodeGenVisitor::visit(DestinedStmt* node) {
 void CodeGenVisitor::visit(DivineStmt* node) {
     if (currentPhase != Phase::IMPLEMENTATIONS) return;
 
+    emitLine("{ // --- divine block scope ---");
     emitLine("/* --- divine: pattern match on Omen + ownership rebinding --- */");
 
-    // Determine the result variable type name.
-    // We use a generic name here; in a full implementation this would be
-    // looked up from the spell's registered return type.
-    // For V1: emit as void* to let it compile, with a comment.
-    // The key semantic (ownership rebinding, branch dispatch) is correct.
     indent();
-    emit("__auto_type __result = "); // GCC __auto_type deduces the Tuple struct type
+    emit("__auto_type __result = ");
     node->spellCall->accept(*this);
     emit(";\n");
 
-    // <~ rebinding: extract __elem0 (the ownership pointer) back to the caller.
-    // This is the moment ownership returns from the spell to my_disk.
-    emitLine(node->targetVar.lexeme + " = __result.__elem0; /* <~ ownership rebound */");
+    // THE FIX: Dereference the ownership pointer if the target is a stack value
+    bool isPointer = stancePointerVars.count(node->targetVar.lexeme) > 0;
+    if (isPointer) {
+        emitLine(node->targetVar.lexeme + " = __result.__elem0; /* <~ ownership rebound */");
+    } else {
+        emitLine(node->targetVar.lexeme + " = *(__result.__elem0); /* <~ ownership rebound (deref) */");
+    }
     emitLine("");
 
-    // Emit pattern match branches.
     bool isFirst = true;
     for (auto& branch : node->branches) {
-        // THE FIX: Tell CodeGen this local alias is a pointer so AssignStmt uses '->'
         stancePointerVars.insert(branch.ownerVar.lexeme);
         indent();
 
         if (!branch.isRuin) {
-            // SUCCESS branch (with or without payload)
             if (!isFirst) emit("else ");
             emit("if (!__result.__elem1.__is_ruin) { /* success */\n");
             indentLevel++;
             emitLine("__auto_type " + branch.ownerVar.lexeme + " = __result.__elem0; /* local alias */");
 
-            // Only declare and access __value if there is a payload.
-            // isPayloadless = true means the omen success type is abyss —
-            // there is no __value field in the union (void __value is illegal C).
-            // Emitting a local variable here would be the ghost variable trap.
             if (!branch.isPayloadless) {
                 std::string successCType = getCType(branch.successType);
                 if (successCType != "void") {
-                    emitLine(successCType + " " + branch.successVar.lexeme +
-                             " = __result.__elem1.__value;");
+                    emitLine(successCType + " " + branch.successVar.lexeme + " = __result.__elem1.__value;");
                 }
             }
 
@@ -992,7 +1003,6 @@ void CodeGenVisitor::visit(DivineStmt* node) {
             emitLine("}");
 
         } else if (branch.isSpecificRuin) {
-            // SPECIFIC RUIN branch: (ctrl, ruin<DiskError::HardwareFault>) => { ... }
             if (!isFirst) emit("else ");
             emit("if (__result.__elem1.__is_ruin && __result.__elem1.__ruin == " +
                  branch.rankName.lexeme + "_" + branch.variantName.lexeme + ") {\n");
@@ -1003,44 +1013,111 @@ void CodeGenVisitor::visit(DivineStmt* node) {
             emitLine("}");
 
         } else {
-            // CATCH-ALL RUIN branch: (ctrl, ruin err) => { ... }
             if (!isFirst) emit("else ");
             emit("{ /* catch-all ruin */\n");
             indentLevel++;
             emitLine("__auto_type " + branch.ownerVar.lexeme + " = __result.__elem0; /* local alias */");
-            // Declare the error variable holding the ruin discriminant.
-            emitLine("uint16_t " + branch.catchAllVar.lexeme +
-                     " = __result.__elem1.__ruin;");
+            emitLine("uint16_t " + branch.catchAllVar.lexeme + " = __result.__elem1.__ruin;");
             for (auto& s : branch.body->statements) s->accept(*this);
             indentLevel--;
             emitLine("}");
         }
-
         isFirst = false;
     }
     emitLine("");
+    emitLine("} // --- end divine block ---");
 }
 
 void CodeGenVisitor::visit(VarDeclStmt* node) {
     if (currentPhase != Phase::IMPLEMENTATIONS) return;
 
-    indent();
-    
-    // Map Cgil types (mark16) to C types (int16_t)
-    std::string cType = getCType(node->typeToken); 
-    
-    emit(cType + " " + node->name.lexeme);
+    std::string cType = getCType(node->typeToken);
 
-    if (node->initializer) {
-        emit(" = ");
-        
-        // This is the magic part! Because we already upgraded LiteralExpr 
-        // to wrap strings in Cgil_Scroll, simply calling accept() here 
-        // automatically fixes the String-to-Scroll Collision edge case!
-        node->initializer->accept(*this);
+    if (node->isArray) {
+        // Array declaration: deck[80] rune buf;
+        // Emits: uint8_t buf[80];
+        // GNU compound-literal initializer for arrays: uint8_t buf[80] = {0};
+        indent();
+        emit(cType + " " + node->name.lexeme +
+             "[" + node->arraySizeToken.lexeme + "]");
+        if (node->initializer) {
+            emit(" = ");
+            node->initializer->accept(*this);
+        }
+        emit(";\n");
+    } else {
+        // Scalar declaration: mark16 x = 5;
+        // Emits: int16_t x = 5;
+        indent();
+        emit(cType + " " + node->name.lexeme);
+        if (node->initializer) {
+            emit(" = ");
+            node->initializer->accept(*this);
+        }
+        emit(";\n");
+    }
+}
+
+// Postfix '?' — Omen unpack operator.
+//
+// PHASE 3 FULL IMPLEMENTATION (using resolvedOmenType):
+// Emits a GNU statement expression that:
+//   1. Evaluates the Omen expression exactly once (no double evaluation).
+//   2. Checks __is_ruin — if true, propagates the ruin immediately.
+//   3. If success and the Omen has a __value (not abyss), yields the __value.
+//
+// The resolvedOmenType field (set by SemanticAnalyzer) tells us:
+//   - The concrete Omen typedef name (e.g., "Omen_scroll_DiskError") for _tmp.
+//   - Whether the success type is abyss (no __value in the union).
+//
+// Ruin propagation path:
+//   - If inDestinedSpell: emit  __ret = _tmp; goto __destined_N;
+//   - Otherwise:          emit  return _tmp;   (direct early return)
+//
+// gnu11 target note: Statement expressions `({ ... })` and __auto_type are
+// GNU extensions. This is correct for bare-metal GCC targets.
+void CodeGenVisitor::visit(PostfixExpr* node) {
+    if (currentPhase != Phase::IMPLEMENTATIONS) return;
+
+    std::string tmpType = "__auto_type";
+    bool isAbyssOmen = false;
+
+    if (node->resolvedOmenType) {
+        if (node->resolvedOmenType->successType) {
+            isAbyssOmen = (node->resolvedOmenType->successType->name == "abyss" ||
+                           (node->resolvedOmenType->successType->kind == TypeKind::PRIMITIVE &&
+                            node->resolvedOmenType->successType->name == "abyss"));
+        }
+        if (!node->resolvedOmenType->name.empty() && node->resolvedOmenType->name != "Omen") {
+            tmpType = node->resolvedOmenType->name;
+        }
     }
 
-    emitLine(";");
+    emit("({ ");
+    emit(tmpType + " _omen_tmp_ = ");
+    node->operand->accept(*this);
+    emit("; ");
+    emit("if (_omen_tmp_.__is_ruin) { ");
+
+    // THE FIX: Unpack the ruin and repackage it into the OUTER spell's exact return type.
+    if (inDestinedSpell && !currentDestinedBlocks.empty()) {
+        int lastDeclared = globalDestinedCounter + (int)currentDestinedBlocks.size() - 1;
+        if (currentSpell->returnTypes.size() > 1) {
+            std::string expectedOmen = getOmenTypeName(currentSpell->returnTypes[1].typeToken.lexeme, currentSpell->omenErrorType.lexeme);
+            emit("__ret.__elem1 = (" + expectedOmen + "){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }; ");
+        } else {
+            emit("__ret = (" + currentReturnTypeName + "){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }; ");
+        }
+        emit("goto __destined_" + std::to_string(lastDeclared) + "; ");
+    } else {
+        // Standard early return wrapper
+        emit("return (" + currentReturnTypeName + "){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }; ");
+    }
+    emit("} ");
+
+    // STATEMENT EXPRESSION END: Yields the value or 0 cleanly.
+    if (isAbyssOmen) { emit("0; "); } else { emit("_omen_tmp_.__value; "); }
+    emit("})");
 }
 
 // =============================================================================
@@ -1068,18 +1145,14 @@ void CodeGenVisitor::visit(BinaryExpr* node) {
     if (currentPhase != Phase::IMPLEMENTATIONS) return;
 
     if (node->op.type == TokenType::WEAVE) {
-        // a ~> f()  ->  f(a)
-        // a ~> f(b) ->  f(a, b)  [handled when f is emitted as CallExpr with args]
-        // For simplicity in V1: emit right(left).
-        // A full implementation would insert 'left' as the first arg of the CallExpr.
         auto* callRight = dynamic_cast<CallExpr*>(node->right.get());
         if (callRight) {
             callRight->callee->accept(*this);
             emit("(");
-            node->left->accept(*this); // Prepend left as first argument
-            for (auto& arg : callRight->args) {
+            node->left->accept(*this);
+            for (size_t i = 0; i < callRight->args.size(); ++i) {
                 emit(", ");
-                arg->accept(*this);
+                callRight->args[i]->accept(*this);
             }
             emit(")");
         } else {
@@ -1095,17 +1168,23 @@ void CodeGenVisitor::visit(BinaryExpr* node) {
     node->left->accept(*this);
 
     if (node->op.type == TokenType::ARROW || node->op.type == TokenType::DOT) {
-        emit(node->op.lexeme); // -> or . with no spaces
+        emit(node->op.lexeme); // -> or .
+        
+        auto* rightIdent = dynamic_cast<IdentifierExpr*>(node->right.get());
+        // THE FIX: Intercept "stance" and map it to the C struct's "__stance"
+        if (rightIdent && rightIdent->token.lexeme == "stance") {
+            emit("__stance"); 
+        } else {
+            node->right->accept(*this);
+        }
     } else {
-        // Map Cgil operator tokens to C operators.
-        // Most have the same lexeme as C. Special cases:
         std::string opStr = node->op.lexeme;
         if (node->op.type == TokenType::EQ)  opStr = "==";
         if (node->op.type == TokenType::NEQ) opStr = "!=";
         emit(" " + opStr + " ");
+        node->right->accept(*this);
     }
 
-    node->right->accept(*this);
     emit(")");
 }
 
@@ -1114,24 +1193,6 @@ void CodeGenVisitor::visit(UnaryExpr* node) {
     if (currentPhase != Phase::IMPLEMENTATIONS) return;
     emit(node->op.lexeme);
     node->operand->accept(*this);
-}
-
-// Postfix '?' — Omen unpack operator.
-//
-// Semantics: If the Omen is a ruin, propagate it up the call chain.
-//            If success, unwrap and produce the value.
-//
-// CodeGen: For V1, we access the success field directly.
-// The propagation (early return on ruin) is a V1.5 feature that requires
-// emitting conditional logic around the usage site.
-//
-// FIXED: The original emitted '.success_payload' which does not exist.
-//        The correct field name is '.__value' per the spec Omen ABI.
-void CodeGenVisitor::visit(PostfixExpr* node) {
-    if (currentPhase != Phase::IMPLEMENTATIONS) return;
-    emit("(");
-    node->operand->accept(*this);
-    emit(").__value /* ? unwrap */");
 }
 
 // Integer, string, and boolean literals.
@@ -1276,24 +1337,71 @@ void CodeGenVisitor::visit(CallExpr* node) {
 void CodeGenVisitor::visit(AddressOfExpr* node) {
     if (currentPhase != Phase::IMPLEMENTATIONS) return;
 
-    // Check if the operand is a hardware variable identifier.
     auto* ident = dynamic_cast<IdentifierExpr*>(node->operand.get());
-    if (ident) {
-        // Portline address: &disk_data_port -> ((uint16_t)0x1F0)
-        if (portlineAddressMap.count(ident->token.lexeme)) {
-            emit("((uint16_t)" + portlineAddressMap.at(ident->token.lexeme) + ")");
-            return;
-        }
-        // Leyline address: the volatile pointer variable itself holds the address.
-        // &leyline_name in Cgil evaluates to the address as an addr value.
-        // In C, the leyline variable IS the pointer, so casting it gives the address.
-        // We detect leylines by checking if they are in the type map as hardware.
-        // For V1: we emit the variable name cast to uint16_t.
-        // (A full implementation would check the SymbolTable for isHardware.)
+    if (ident && portlineAddressMap.count(ident->token.lexeme)) {
+        emit("((uint16_t)" + portlineAddressMap.at(ident->token.lexeme) + ")");
+        return;
     }
 
-    // Regular address-of.
+    // Standard C address-of (let GCC handle the 16/64 bit sizing via flags)
     emit("&(");
     node->operand->accept(*this);
     emit(")");
+}
+
+// Array subscript: target[index]
+// Emits: (target)[index]
+//
+// The parentheses around target prevent operator precedence issues when
+// target is a complex expression (e.g., a member access or portline read).
+//
+// Portline arrays: if target is a portline leyline identifier, it evaluates
+// to the value at the address — which is NOT an array in the C sense. This
+// would be a semantic error caught by the Semantic Analyzer in V1.5.
+// V1: We emit it directly and let GCC catch misuse.
+void CodeGenVisitor::visit(IndexExpr* node) {
+    if (currentPhase != Phase::IMPLEMENTATIONS) return;
+
+    emit("(");
+    node->target->accept(*this);
+    emit(")[");
+    node->index->accept(*this);
+    emit("]");
+}
+
+// Struct initializer: Device:Idle { device_id: 0, error_code: 0, flags: 0 }
+//
+// Emits (with stance prefix):
+//   (Device){ .__stance = Device_Idle, .device_id = 0, .error_code = 0, .flags = 0 }
+//
+// Emits (without stance prefix):
+//   (Packet){ .length = 64, .checksum = 0xABCD, .type_byte = 0x01, .sequence = 100 }
+//
+// GNU designated initializers (.fieldname = value) are C99 and above.
+// They allow any subset of fields to be specified; unspecified fields are zero-initialized.
+//
+// LIFETIME NOTE: This produces a compound literal with block scope lifetime.
+// Safe to pass by value or by borrow to spells. Unsafe to pass to conjure spells
+// by non-owned pointer if the callee retains the pointer past the statement boundary.
+// (The Semantic Analyzer documents this constraint but does not enforce it in V1.)
+void CodeGenVisitor::visit(StructInitExpr* node) {
+    if (currentPhase != Phase::IMPLEMENTATIONS) return;
+
+    emit("(" + node->typeName.lexeme + "){ ");
+
+    // If a stance prefix is present, emit the __stance discriminant first.
+    // This matches the sigil struct layout: __stance is always the first field.
+    if (!node->stanceName.lexeme.empty()) {
+        emit(".__stance = " + node->typeName.lexeme + "_" + node->stanceName.lexeme);
+        if (!node->fields.empty()) emit(", ");
+    }
+
+    // Emit field initializers as GNU designated initializers.
+    for (size_t i = 0; i < node->fields.size(); ++i) {
+        emit("." + node->fields[i].name.lexeme + " = ");
+        node->fields[i].value->accept(*this);
+        if (i < node->fields.size() - 1) emit(", ");
+    }
+
+    emit(" }");
 }

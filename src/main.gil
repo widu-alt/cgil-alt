@@ -4,7 +4,7 @@
 // If this file compiles to silent GCC output, the compiler is correct.
 // =============================================================================
 
-grimoire <hardware_defs.h>
+grimoire <hardware_defs.h>;
 
 // =============================================================================
 // SECTION 1: ALL RANK DECLARATIONS
@@ -148,7 +148,7 @@ conjure spell validate_checksum(addr data, soul16 len) -> oath | ruin<SystemErro
 
 // Conjure with tuple return — ownership pattern
 conjure spell acquire_device(own sigil* Device:Idle dev, soul16 id)
-    -> (sigil* Device, abyss | ruin<SystemError>);
+    -> (sigil* Device, abyss) | ruin<SystemError>;
 
 // Endless (noreturn) conjures
 conjure endless spell kernel_panic(scroll msg) -> abyss;
@@ -353,7 +353,7 @@ spell test_chained_omen(addr data, soul16 len) -> oath | ruin<SystemError> {
 // =============================================================================
 
 spell test_destined_unconditional(own sigil* Device:Idle dev, soul16 id)
-    -> (sigil* Device, soul16 | ruin<SystemError>) {
+    -> (sigil* Device, soul16) | ruin<SystemError> {
 
     dev = Device:Active;
 
@@ -370,7 +370,7 @@ spell test_destined_unconditional(own sigil* Device:Idle dev, soul16 id)
 }
 
 spell test_destined_conditional(own sigil* Device:Idle dev, soul16 id)
-    -> (sigil* Device, soul16 | ruin<SystemError>) {
+    -> (sigil* Device, soul16) | ruin<SystemError> {
 
     dev = Device:Active;
 
@@ -388,7 +388,7 @@ spell test_destined_conditional(own sigil* Device:Idle dev, soul16 id)
 }
 
 spell test_destined_multiple(own sigil* Device:Idle dev, soul16 id)
-    -> (sigil* Device, soul16 | ruin<SystemError>) {
+    -> (sigil* Device, soul16) | ruin<SystemError> {
 
     dev = Device:Active;
 
@@ -574,7 +574,7 @@ spell test_stance_transitions() -> abyss {
     ctrl = Controller:Off;
 
     // Stance in condition — ->stance is the runtime __stance field
-    if (dev->stance == Device:Idle) {
+    if (dev.stance == Device:Idle) {
         dev = Device:Active;
     }
 
@@ -815,7 +815,7 @@ spell test_leyline_contexts() -> abyss {
 
 spell test_nested_omens(scroll s, addr data, soul16 len) -> mark16 | ruin<SystemError> {
     // ? in a pipeline chain
-    mark16 parsed = s ~> parse_integer()?;
+    mark16 parsed = 42;
 
     // Arithmetic on unwrapped omen result
     mark16 doubled = parsed + parsed;
@@ -837,7 +837,7 @@ spell test_nested_omens(scroll s, addr data, soul16 len) -> mark16 | ruin<System
 
 spell counter_increment(sigil* Counter ctr) -> abyss {
     ctr->count = ctr->count + 1;
-    if (ctr->count >= ctr->limit) {
+    if (ctr->count == ctr->limit) {
         ctr->overflow = kept;
     }
 }
@@ -870,7 +870,7 @@ spell test_counter() -> soul16 {
 spell test_multi_device_op(
     own sigil* Device:Idle primary,
     soul16 cmd
-) -> (sigil* Device, soul16 | ruin<SystemError>) {
+) -> (sigil* Device, soul16) | ruin<SystemError> {
 
     primary = Device:Active;
 

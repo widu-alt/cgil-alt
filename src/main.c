@@ -8,6 +8,7 @@
 #include <stdbool.h>
 
 // --- Cgil Grimoire Includes ---
+#include <hardware_defs.h>
 
 // --- Cgil Runtime Structures ---
 // scroll: a fat pointer (address + length). Allocates no heap.
@@ -16,42 +17,901 @@ typedef struct { const uint8_t* ptr; uint16_t len; } Cgil_Scroll;
 // ============================================================
 // PHASE 1: TYPE DEFINITIONS
 // ============================================================
+#include <hardware_defs.h>
+// rank SystemError
+typedef uint16_t SystemError;
+#define SystemError_None ((SystemError)0)
+#define SystemError_Timeout ((SystemError)1)
+#define SystemError_HardwareFault ((SystemError)2)
+#define SystemError_InvalidSector ((SystemError)3)
+#define SystemError_OutOfMemory ((SystemError)4)
+#define SystemError_PermissionDenied ((SystemError)5)
+
+// rank DeviceStatus
+typedef uint16_t DeviceStatus;
+#define DeviceStatus_Unknown ((DeviceStatus)0)
+#define DeviceStatus_Ready ((DeviceStatus)1)
+#define DeviceStatus_Busy ((DeviceStatus)2)
+#define DeviceStatus_Offline ((DeviceStatus)3)
+
+// rank ParseResult
+typedef uint16_t ParseResult;
+#define ParseResult_Ok ((ParseResult)0)
+#define ParseResult_InvalidChar ((ParseResult)1)
+#define ParseResult_Overflow ((ParseResult)2)
+#define ParseResult_Empty ((ParseResult)3)
+
+// rank SingleVariant
+typedef uint16_t SingleVariant;
+#define SingleVariant_Only ((SingleVariant)0)
+
+// Stance discriminants for sigil Device
+#define Device_Idle ((uint16_t)0)
+#define Device_Active ((uint16_t)1)
+#define Device_Suspended ((uint16_t)2)
+#define Device_Fault ((uint16_t)3)
+
+// sigil Device
+typedef struct {
+    uint16_t __stance; // implicit stance discriminant — do not access directly
+    uint16_t device_id;
+    uint16_t error_code;
+    uint8_t flags;
+} Device;
+
+// Stance discriminants for sigil Controller
+#define Controller_Off ((uint16_t)0)
+#define Controller_Starting ((uint16_t)1)
+#define Controller_Running ((uint16_t)2)
+#define Controller_Stopping ((uint16_t)3)
+#define Controller_Halted ((uint16_t)4)
+
+// sigil Controller
+typedef struct {
+    uint16_t __stance; // implicit stance discriminant — do not access directly
+} Controller;
+
+// sigil Packet
+typedef struct {
+    uint16_t length;
+    uint16_t checksum;
+    uint8_t type_byte;
+    int16_t sequence;
+} Packet;
+
+// sigil TypeTable
+typedef struct {
+    int16_t signed_small;
+    int32_t signed_large;
+    uint16_t unsigned_small;
+    uint32_t unsigned_large;
+    uint8_t byte_val;
+    uint8_t bool_val;
+    uint16_t address_val;
+} TypeTable;
+
+// sigil Counter
+typedef struct {
+    uint16_t count;
+    uint16_t limit;
+    uint8_t overflow;
+} Counter;
+
+// legion SectorCache (V1 stub: emitted as struct)
+typedef struct {
+    uint32_t sector_lba;
+    uint16_t access_count;
+    uint8_t is_dirty;
+    uint8_t flags;
+} SectorCache;
+
+// legion MetricsTable (V1 stub: emitted as struct)
+typedef struct {
+    uint32_t read_count;
+    uint32_t write_count;
+    int32_t latency_sum;
+    uint16_t error_count;
+} MetricsTable;
+
+// leyline vga_buffer @ 0xB8000
+#define vga_buffer (*(volatile uint16_t *)0xB8000)
+
+// leyline vga_ctrl @ 0x3D4
+#define vga_ctrl (*(volatile uint8_t *)0x3D4)
+
+// portline com1_data @ 0x3F8 (reads/writes emit inline asm)
+
+// portline com1_status @ 0x3FD (reads/writes emit inline asm)
+
+// portline pic_cmd_master @ 0x20 (reads/writes emit inline asm)
+
+// portline pic_data_master @ 0x21 (reads/writes emit inline asm)
+
+// portline keyboard_data @ 0x60 (reads/writes emit inline asm)
+
+// portline keyboard_status @ 0x64 (reads/writes emit inline asm)
+
+// portline ata_data @ 0x1F0 (reads/writes emit inline asm)
+
+// portline ata_status @ 0x1F7 (reads/writes emit inline asm)
+
+// portline ata_command @ 0x1F7 (reads/writes emit inline asm)
+
+// Omen type: mark16 | ruin<ParseResult>
+typedef struct {
+    uint8_t __is_ruin; // 0 = success, 1 = ruin
+    union {
+        int16_t __value; // success payload
+        uint16_t __ruin;          // ruin discriminant (rank variant value)
+    };
+} Omen_mark16_ParseResult;
+
+// Omen type: oath | ruin<SystemError>
+typedef struct {
+    uint8_t __is_ruin; // 0 = success, 1 = ruin
+    union {
+        uint8_t __value; // success payload
+        uint16_t __ruin;          // ruin discriminant (rank variant value)
+    };
+} Omen_oath_SystemError;
+
+// Omen type: abyss | ruin<SystemError>
+typedef struct {
+    uint8_t __is_ruin; // 0 = success, 1 = ruin
+    union {
+        // no __value: success type is abyss (void), no payload stored
+        uint16_t __ruin;          // ruin discriminant (rank variant value)
+    };
+} Omen_abyss_SystemError;
+
+// Tuple return type for spell acquire_device
+typedef struct {
+    Device* __elem0; // ownership pointer (<~ rebinding target)
+    Omen_abyss_SystemError __elem1; // omen payload (success or ruin)
+} Tuple_DevicePtr_abyss_Omen_SystemError;
+
+// Omen type: soul16 | ruin<SystemError>
+typedef struct {
+    uint8_t __is_ruin; // 0 = success, 1 = ruin
+    union {
+        uint16_t __value; // success payload
+        uint16_t __ruin;          // ruin discriminant (rank variant value)
+    };
+} Omen_soul16_SystemError;
+
+// Tuple return type for spell test_destined_unconditional
+typedef struct {
+    Device* __elem0; // ownership pointer (<~ rebinding target)
+    Omen_soul16_SystemError __elem1; // omen payload (success or ruin)
+} Tuple_DevicePtr_soul16_Omen_SystemError;
+
+// Omen type: mark16 | ruin<SystemError>
+typedef struct {
+    uint8_t __is_ruin; // 0 = success, 1 = ruin
+    union {
+        int16_t __value; // success payload
+        uint16_t __ruin;          // ruin discriminant (rank variant value)
+    };
+} Omen_mark16_SystemError;
+
+// Omen type: abyss | ruin<SingleVariant>
+typedef struct {
+    uint8_t __is_ruin; // 0 = success, 1 = ruin
+    union {
+        // no __value: success type is abyss (void), no payload stored
+        uint16_t __ruin;          // ruin discriminant (rank variant value)
+    };
+} Omen_abyss_SingleVariant;
+
 
 // ============================================================
 // PHASE 2: FUNCTION PROTOTYPES
 // ============================================================
+void raw_memcpy(uint16_t dest, uint16_t src, uint16_t len);
+void raw_memset(uint16_t dest, uint8_t val, uint16_t len);
+int16_t raw_memcmp(uint16_t a, uint16_t b, uint16_t len);
+Omen_mark16_ParseResult parse_integer(Cgil_Scroll s);
+Omen_oath_SystemError validate_checksum(uint16_t data, uint16_t len);
+Tuple_DevicePtr_abyss_Omen_SystemError acquire_device(Device* dev, uint16_t id);
+__attribute__((noreturn)) void kernel_panic(Cgil_Scroll msg);
+__attribute__((noreturn)) void reboot();
+void timer_irq(void* __irq_frame);
+void keyboard_irq(void* __irq_frame);
+void ata_irq(void* __irq_frame);
 int16_t test_all_primitives(int16_t a, int32_t b, uint16_t c, uint32_t d, uint16_t e, uint8_t f, uint8_t g);
+uint16_t test_control_flow(int16_t n);
+Omen_mark16_ParseResult test_omen_unpack(Cgil_Scroll input);
+Omen_oath_SystemError test_chained_omen(uint16_t data, uint16_t len);
+Tuple_DevicePtr_soul16_Omen_SystemError test_destined_unconditional(Device* dev, uint16_t id);
+Tuple_DevicePtr_soul16_Omen_SystemError test_destined_conditional(Device* dev, uint16_t id);
+Tuple_DevicePtr_soul16_Omen_SystemError test_destined_multiple(Device* dev, uint16_t id);
+void test_divine_standard(Device* dev, uint16_t id);
+void test_divine_payloadless(Device* dev, uint16_t id);
+void test_divine_no_catchall(Device* dev, uint16_t id);
+Omen_mark16_ParseResult test_weave_simple(Cgil_Scroll input);
+Omen_oath_SystemError test_weave_address(uint16_t len);
+void test_address_of();
+Device* spell_requires_idle(Device* dev);
+Controller* spell_requires_running(Controller* ctrl);
+Device* spell_any_stance(Device* dev);
+void test_stance_transitions();
+int16_t test_all_operators(int16_t a, int16_t b, uint16_t c);
+uint16_t test_member_access(Packet* pkt);
+void test_sigil_init();
+void test_string_literals();
+void test_portline_contexts();
+void test_leyline_contexts();
+Omen_mark16_SystemError test_nested_omens(Cgil_Scroll s, uint16_t data, uint16_t len);
+void counter_increment(Counter* ctr);
+void counter_reset(Counter* ctr);
+uint16_t test_counter();
+Tuple_DevicePtr_soul16_Omen_SystemError test_multi_device_op(Device* primary, uint16_t cmd);
+void test_legion_usage();
+void test_divine_all_branches();
+Omen_abyss_SingleVariant do_only_thing();
+void test_single_variant_rank();
+void test_deep_nesting_in_divine();
 int16_t main();
 
 // ============================================================
 // PHASE 3: IMPLEMENTATIONS
 // ============================================================
+// extern: raw_memcpy (declared via conjure)
+// extern: raw_memset (declared via conjure)
+// extern: raw_memcmp (declared via conjure)
+// extern: parse_integer (declared via conjure)
+// extern: validate_checksum (declared via conjure)
+// extern: acquire_device (declared via conjure)
+// extern: kernel_panic (declared via conjure)
+// extern: reboot (declared via conjure)
+__attribute__((interrupt)) void timer_irq(void* __irq_frame) {
+    uint8_t status = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x20)); __tmp; });
+    asm volatile("outb %0, %1" :: "a"((uint8_t)(0x20)), "d"((uint16_t)0x20));
+    uint16_t vga_val = vga_buffer;
+}
+
+__attribute__((interrupt)) void keyboard_irq(void* __irq_frame) {
+    uint8_t scancode = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+    if ((scancode == 0x01)) {
+        uint8_t dummy = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+    }
+    else if ((scancode == 0x1C)) {
+        uint8_t dummy2 = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+    }
+    else {
+        uint8_t dummy3 = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+    }
+    
+    // --- Destined RAII Cleanup Chain (LIFO order) ---
+    __destined_0:;
+    asm volatile("outb %0, %1" :: "a"((uint8_t)(0x20)), "d"((uint16_t)0x20));
+    return;
+}
+
+__attribute__((interrupt)) void ata_irq(void* __irq_frame) {
+    uint8_t status = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x1F7)); __tmp; });
+    asm volatile("outb %0, %1" :: "a"((uint8_t)(0x20)), "d"((uint16_t)0x20));
+}
+
 int16_t test_all_primitives(int16_t a, int32_t b, uint16_t c, uint32_t d, uint16_t e, uint8_t f, uint8_t g) {
-    int16_t add_result = (a + a)    ;
-    int16_t sub_result = (a - a)    ;
-    int16_t mul_result = (a * a)    ;
-    int16_t div_result = (a / a)    ;
-    uint8_t eq_test = (a == a)    ;
-    uint8_t neq_test = (a != a)    ;
-    uint8_t gt_test = (a > a)    ;
-    uint8_t lt_test = (a < a)    ;
-    uint8_t always_true = 1    ;
-    uint8_t always_false = 0    ;
-    int16_t decimal_lit = 255    ;
-    int16_t hex_lit = 0xFF    ;
-    uint16_t large_hex = 0xB800    ;
-    uint16_t hw_addr = 0x1F7    ;
-    int32_t local_b = b    ;
-    uint16_t local_c = c    ;
-    uint32_t local_d = d    ;
-    uint16_t local_e = e    ;
-    uint8_t local_f = f    ;
-    uint8_t local_g = g    ;
+    int16_t add_result = (a + a);
+    int16_t sub_result = (a - a);
+    int16_t mul_result = (a * a);
+    int16_t div_result = (a / a);
+    uint8_t eq_test = (a == a);
+    uint8_t neq_test = (a != a);
+    uint8_t gt_test = (a > a);
+    uint8_t lt_test = (a < a);
+    uint8_t always_true = 1;
+    uint8_t always_false = 0;
+    int16_t decimal_lit = 255;
+    int16_t hex_lit = 0xFF;
+    uint16_t large_hex = 0xB800;
+    uint16_t hw_addr = 0x1F7;
+    int32_t local_b = b;
+    uint16_t local_c = c;
+    uint32_t local_d = d;
+    uint16_t local_e = e;
+    uint8_t local_f = f;
+    uint8_t local_g = g;
     return add_result;
 }
 
+uint16_t test_control_flow(int16_t n) {
+    uint16_t result = 0;
+    if ((n == 0)) {
+        result = 1;
+    }
+    else if ((n == 1)) {
+        result = 2;
+    }
+    else if ((n == 2)) {
+        result = 3;
+    }
+    else {
+        result = 4;
+    }
+    int16_t whirl_count = 0;
+    while ((whirl_count < n)) {
+        whirl_count = (whirl_count + 1);
+        if ((whirl_count == 5)) {
+            break;
+        }
+        result = (result + 1);
+    }
+    int16_t surge_count = 0;
+    while ((surge_count < 10)) {
+        surge_count = (surge_count + 1);
+        if ((surge_count == 3)) {
+            continue;
+        }
+        result = (result + 1);
+    }
+    for (int16_t i = 0; (i < n); i = (i + 1)) {
+        if ((i == 7)) {
+            break;
+        }
+        result = (result + 1);
+    }
+    for (int16_t j = 0; (j < n); j = (j + 1)) {
+        if ((j == 3)) {
+            continue;
+        }
+        result = (result + 1);
+    }
+    for (int16_t outer = 0; (outer < 3); outer = (outer + 1)) {
+        for (int16_t inner = 0; (inner < 3); inner = (inner + 1)) {
+            if ((inner == 1)) {
+                continue;
+            }
+            result = (result + 1);
+        }
+        if ((outer == 2)) {
+            break;
+        }
+    }
+    if ((n > 0)) {
+        if ((n > 1)) {
+            if ((n > 2)) {
+                if ((n > 3)) {
+                    result = (result + 1);
+                }
+                else {
+                    result = (result + 2);
+                }
+            }
+        }
+    }
+    return result;
+}
+
+Omen_mark16_ParseResult test_omen_unpack(Cgil_Scroll input) {
+    int16_t val = ({ __auto_type _omen_tmp_ = parse_integer(input); if (_omen_tmp_.__is_ruin) { return (Omen_mark16_ParseResult){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }; } _omen_tmp_.__value; });
+    return (Omen_mark16_ParseResult){ .__is_ruin = 0, .__value = val };
+}
+
+Omen_oath_SystemError test_chained_omen(uint16_t data, uint16_t len) {
+    uint8_t result = ({ __auto_type _omen_tmp_ = validate_checksum(data, len); if (_omen_tmp_.__is_ruin) { return (Omen_oath_SystemError){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }; } _omen_tmp_.__value; });
+    return (Omen_oath_SystemError){ .__is_ruin = 0, .__value = result };
+}
+
+Tuple_DevicePtr_soul16_Omen_SystemError test_destined_unconditional(Device* dev, uint16_t id) {
+    Tuple_DevicePtr_soul16_Omen_SystemError __ret; // unified return slot for destined RAII
+    
+    dev->__stance = Device_Active;
+    if ((id == 0)) {
+        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_InvalidSector } };
+        goto __destined_1;
+    }
+    __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 0, .__value = id } };
+    goto __destined_1;
+    
+    // --- Destined RAII Cleanup Chain (LIFO order) ---
+    __destined_1:;
+    dev->__stance = Device_Idle;
+    return __ret;
+}
+
+Tuple_DevicePtr_soul16_Omen_SystemError test_destined_conditional(Device* dev, uint16_t id) {
+    Tuple_DevicePtr_soul16_Omen_SystemError __ret; // unified return slot for destined RAII
+    
+    dev->__stance = Device_Active;
+    if ((id == 0)) {
+        dev->__stance = Device_Fault;
+        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_HardwareFault } };
+        goto __destined_2;
+    }
+    __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 0, .__value = id } };
+    goto __destined_2;
+    
+    // --- Destined RAII Cleanup Chain (LIFO order) ---
+    __destined_2:;
+    if (((dev->__stance) != Device_Fault)) {
+        dev->__stance = Device_Idle;
+    }
+    return __ret;
+}
+
+Tuple_DevicePtr_soul16_Omen_SystemError test_destined_multiple(Device* dev, uint16_t id) {
+    Tuple_DevicePtr_soul16_Omen_SystemError __ret; // unified return slot for destined RAII
+    
+    dev->__stance = Device_Active;
+    if ((id == 0)) {
+        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_Timeout } };
+        goto __destined_4;
+    }
+    if ((id == 1)) {
+        dev->__stance = Device_Fault;
+        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_HardwareFault } };
+        goto __destined_4;
+    }
+    __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 0, .__value = id } };
+    goto __destined_4;
+    
+    // --- Destined RAII Cleanup Chain (LIFO order) ---
+    __destined_4:;
+    if (((dev->__stance) != Device_Fault)) {
+        dev->__stance = Device_Suspended;
+    }
+    __destined_3:;
+    dev->__stance = Device_Idle;
+    return __ret;
+}
+
+void test_divine_standard(Device* dev, uint16_t id) {
+    Device my_dev = (Device){ .__stance = Device_Idle, .device_id = 0, .error_code = 0, .flags = 0 };
+    { // --- divine block scope ---
+    /* --- divine: pattern match on Omen + ownership rebinding --- */
+    __auto_type __result = test_destined_conditional(&(my_dev), id);
+    my_dev = *(__result.__elem0); /* <~ ownership rebound (deref) */
+    
+    if (!__result.__elem1.__is_ruin) { /* success */
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint16_t val = __result.__elem1.__value;
+        uint16_t used_val = val;
+    }
+    else if (__result.__elem1.__is_ruin && __result.__elem1.__ruin == SystemError_HardwareFault) {
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        kernel_panic(((Cgil_Scroll){ .ptr = (const uint8_t*)"Hardware fault", .len = 14 }));
+    }
+    else if (__result.__elem1.__is_ruin && __result.__elem1.__ruin == SystemError_Timeout) {
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint8_t dummy = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x20)); __tmp; });
+    }
+    else { /* catch-all ruin */
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint16_t err = __result.__elem1.__ruin;
+        uint16_t err_val = err;
+    }
+    
+    } // --- end divine block ---
+    my_dev.__stance = Device_Idle;
+}
+
+void test_divine_payloadless(Device* dev, uint16_t id) {
+    Device my_dev = (Device){ .__stance = Device_Idle, .device_id = 0, .error_code = 0, .flags = 0 };
+    { // --- divine block scope ---
+    /* --- divine: pattern match on Omen + ownership rebinding --- */
+    __auto_type __result = acquire_device(&(my_dev), id);
+    my_dev = *(__result.__elem0); /* <~ ownership rebound (deref) */
+    
+    if (!__result.__elem1.__is_ruin) { /* success */
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint8_t dummy = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x20)); __tmp; });
+    }
+    else if (__result.__elem1.__is_ruin && __result.__elem1.__ruin == SystemError_HardwareFault) {
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        kernel_panic(((Cgil_Scroll){ .ptr = (const uint8_t*)"Device acquisition failed", .len = 25 }));
+    }
+    else { /* catch-all ruin */
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint16_t err = __result.__elem1.__ruin;
+        uint16_t err_code = err;
+    }
+    
+    } // --- end divine block ---
+    my_dev.__stance = Device_Idle;
+}
+
+void test_divine_no_catchall(Device* dev, uint16_t id) {
+    Device my_dev = (Device){ .__stance = Device_Idle, .device_id = 0, .error_code = 0, .flags = 0 };
+    { // --- divine block scope ---
+    /* --- divine: pattern match on Omen + ownership rebinding --- */
+    __auto_type __result = test_destined_conditional(&(my_dev), id);
+    my_dev = *(__result.__elem0); /* <~ ownership rebound (deref) */
+    
+    if (!__result.__elem1.__is_ruin) { /* success */
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint16_t val = __result.__elem1.__value;
+        uint16_t v = val;
+    }
+    else if (__result.__elem1.__is_ruin && __result.__elem1.__ruin == SystemError_HardwareFault) {
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint8_t d = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+    }
+    else if (__result.__elem1.__is_ruin && __result.__elem1.__ruin == SystemError_Timeout) {
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint8_t d = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+    }
+    
+    } // --- end divine block ---
+    my_dev.__stance = Device_Idle;
+}
+
+Omen_mark16_ParseResult test_weave_simple(Cgil_Scroll input) {
+    int16_t result = ({ __auto_type _omen_tmp_ = parse_integer(input); if (_omen_tmp_.__is_ruin) { return (Omen_mark16_ParseResult){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }; } _omen_tmp_.__value; });
+    return (Omen_mark16_ParseResult){ .__is_ruin = 0, .__value = result };
+}
+
+Omen_oath_SystemError test_weave_address(uint16_t len) {
+    uint8_t result = ({ __auto_type _omen_tmp_ = validate_checksum(((uint16_t)0x1F0), len); if (_omen_tmp_.__is_ruin) { return (Omen_oath_SystemError){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }; } _omen_tmp_.__value; });
+    return (Omen_oath_SystemError){ .__is_ruin = 0, .__value = result };
+}
+
+void test_address_of() {
+    Packet pkt = (Packet){ .length = 0, .checksum = 0, .type_byte = 0, .sequence = 0 };
+    uint16_t pkt_addr = &(pkt);
+    uint16_t vga_addr = &(vga_buffer);
+    uint16_t ata_port_addr = ((uint16_t)0x1F0);
+    if ((ata_port_addr == 0x1F0)) {
+        uint8_t dummy = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+    }
+}
+
+Device* spell_requires_idle(Device* dev) {
+    dev->__stance = Device_Active;
+    return dev;
+}
+
+Controller* spell_requires_running(Controller* ctrl) {
+    ctrl->__stance = Controller_Stopping;
+    return ctrl;
+}
+
+Device* spell_any_stance(Device* dev) {
+    return dev;
+}
+
+void test_stance_transitions() {
+    Device dev = (Device){ .__stance = Device_Idle, .device_id = 1, .error_code = 0, .flags = 0 };
+    Controller ctrl = (Controller){ .__stance = Controller_Off };
+    dev.__stance = Device_Active;
+    dev.__stance = Device_Suspended;
+    dev.__stance = Device_Fault;
+    dev.__stance = Device_Idle;
+    ctrl.__stance = Controller_Starting;
+    ctrl.__stance = Controller_Running;
+    ctrl.__stance = Controller_Stopping;
+    ctrl.__stance = Controller_Halted;
+    ctrl.__stance = Controller_Off;
+    if (((dev.__stance) == Device_Idle)) {
+        dev.__stance = Device_Active;
+    }
+    Device my_dev = (Device){ .__stance = Device_Idle, .device_id = 2, .error_code = 0, .flags = 0 };
+    { // --- divine block scope ---
+    /* --- divine: pattern match on Omen + ownership rebinding --- */
+    __auto_type __result = test_destined_conditional(&(my_dev), 5);
+    my_dev = *(__result.__elem0); /* <~ ownership rebound (deref) */
+    
+    if (!__result.__elem1.__is_ruin) { /* success */
+        __auto_type ctrl2 = __result.__elem0; /* local alias */
+        uint16_t val = __result.__elem1.__value;
+        uint16_t v = val;
+    }
+    else { /* catch-all ruin */
+        __auto_type ctrl2 = __result.__elem0; /* local alias */
+        uint16_t err = __result.__elem1.__ruin;
+        uint16_t e = err;
+    }
+    
+    } // --- end divine block ---
+    my_dev.__stance = Device_Idle;
+    { // --- divine block scope ---
+    /* --- divine: pattern match on Omen + ownership rebinding --- */
+    __auto_type __result = test_destined_conditional(&(my_dev), 3);
+    my_dev = *(__result.__elem0); /* <~ ownership rebound (deref) */
+    
+    if (!__result.__elem1.__is_ruin) { /* success */
+        __auto_type ctrl3 = __result.__elem0; /* local alias */
+        uint16_t val = __result.__elem1.__value;
+        uint16_t v = val;
+    }
+    else { /* catch-all ruin */
+        __auto_type ctrl3 = __result.__elem0; /* local alias */
+        uint16_t err = __result.__elem1.__ruin;
+        uint16_t e = err;
+    }
+    
+    } // --- end divine block ---
+    my_dev.__stance = Device_Idle;
+}
+
+int16_t test_all_operators(int16_t a, int16_t b, uint16_t c) {
+    int16_t r1 = (a + b);
+    int16_t r2 = (a - b);
+    int16_t r3 = (a * b);
+    int16_t r4 = (a / b);
+    uint8_t eq = (a == b);
+    uint8_t neq = (a != b);
+    uint8_t gt = (a > b);
+    uint8_t lt = (a < b);
+    int16_t prec1 = (a + (b * a));
+    int16_t prec2 = ((a * b) + (b * a));
+    int16_t prec3 = ((a - b) + a);
+    if (((a + b) > (a * b))) {
+        r1 = a;
+    }
+    if ((a > 0)) {
+        if ((b > 0)) {
+            if (((a + b) > a)) {
+                r2 = b;
+            }
+        }
+    }
+    return r1;
+}
+
+uint16_t test_member_access(Packet* pkt) {
+    uint16_t len = (pkt->length);
+    uint16_t csum = (pkt->checksum);
+    uint8_t typ = (pkt->type_byte);
+    int16_t seq = (pkt->sequence);
+    if (((pkt->length) > 0)) {
+        uint16_t adjusted = ((pkt->length) - 1);
+    }
+    if (((pkt->checksum) == 0xFFFF)) {
+        return (pkt->length);
+    }
+    return ((pkt->length) + (pkt->checksum));
+}
+
+void test_sigil_init() {
+    Packet pkt1 = (Packet){ .length = 64, .checksum = 0xABCD, .type_byte = 0x01, .sequence = 100 };
+    Device dev1 = (Device){ .__stance = Device_Idle, .device_id = 42, .error_code = 0, .flags = 0xFF };
+    TypeTable tt = (TypeTable){ .signed_small = 0, .signed_large = 0, .unsigned_small = 0, .unsigned_large = 0, .byte_val = 0, .bool_val = 0, .address_val = 0 };
+    TypeTable tt2 = (TypeTable){ .signed_small = -100, .signed_large = -100000, .unsigned_small = 65535, .unsigned_large = 65535, .byte_val = 0xFF, .bool_val = 1, .address_val = 0x1F7 };
+}
+
+void test_string_literals() {
+    Cgil_Scroll s1 = ((Cgil_Scroll){ .ptr = (const uint8_t*)"Hello, World!", .len = 13 });
+    Cgil_Scroll s2 = ((Cgil_Scroll){ .ptr = (const uint8_t*)"Hello\nCgil!", .len = 11 });
+    Cgil_Scroll s3 = ((Cgil_Scroll){ .ptr = (const uint8_t*)"col1\tcol2", .len = 9 });
+    Cgil_Scroll s4 = ((Cgil_Scroll){ .ptr = (const uint8_t*)"He said \"hello\"", .len = 15 });
+    Cgil_Scroll s5 = ((Cgil_Scroll){ .ptr = (const uint8_t*)"path\\to\\file", .len = 12 });
+    kernel_panic(((Cgil_Scroll){ .ptr = (const uint8_t*)"Test panic message\n", .len = 19 }));
+}
+
+void test_portline_contexts() {
+    if ((({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x1F7)); __tmp; }) == 0x58)) {
+        uint8_t dummy = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x1F7)); __tmp; });
+    }
+    uint8_t status = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x1F7)); __tmp; });
+    uint8_t kb_scan = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+    asm volatile("outb %0, %1" :: "a"((uint8_t)(0x20)), "d"((uint16_t)0x20));
+    asm volatile("outb %0, %1" :: "a"((uint8_t)(0xFB)), "d"((uint16_t)0x21));
+    for (int16_t i = 0; (i < 3); i = (i + 1)) {
+        asm volatile("outb %0, %1" :: "a"((uint8_t)(0x20)), "d"((uint16_t)0x20));
+    }
+    uint16_t data_word = ({ uint16_t __tmp; asm volatile("inw %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x1F0)); __tmp; });
+    asm volatile("outw %0, %1" :: "a"((uint16_t)(0xFFFF)), "d"((uint16_t)0x1F0));
+    uint16_t ata_port = ((uint16_t)0x1F0);
+    if ((ata_port == 0x1F0)) {
+        uint8_t d = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+    }
+}
+
+void test_leyline_contexts() {
+    uint16_t vga_val = vga_buffer;
+    if ((vga_buffer == 0x0720)) {
+        vga_buffer = 0x0720;
+    }
+    vga_buffer = 0x0F48;
+    for (int16_t i = 0; (i < 80); i = (i + 1)) {
+        vga_buffer = 0x0720;
+    }
+    uint16_t vga_phys = &(vga_buffer);
+    if ((vga_phys == 0xB8000)) {
+        vga_buffer = 0x0720;
+    }
+}
+
+Omen_mark16_SystemError test_nested_omens(Cgil_Scroll s, uint16_t data, uint16_t len) {
+    int16_t parsed = 42;
+    int16_t doubled = (parsed + parsed);
+    uint8_t valid = ({ __auto_type _omen_tmp_ = validate_checksum(data, len); if (_omen_tmp_.__is_ruin) { return (Omen_mark16_SystemError){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }; } _omen_tmp_.__value; });
+    if (valid) {
+        return (Omen_mark16_SystemError){ .__is_ruin = 0, .__value = doubled };
+    }
+    return (Omen_mark16_SystemError){ .__is_ruin = 0, .__value = 0 };
+}
+
+void counter_increment(Counter* ctr) {
+    (ctr->count) = ((ctr->count) + 1);
+    if (((ctr->count) == (ctr->limit))) {
+        (ctr->overflow) = 1;
+    }
+}
+
+void counter_reset(Counter* ctr) {
+    (ctr->count) = 0;
+    (ctr->overflow) = 0;
+}
+
+uint16_t test_counter() {
+    Counter ctr = (Counter){ .count = 0, .limit = 10, .overflow = 0 };
+    for (int16_t i = 0; (i < 15); i = (i + 1)) {
+        counter_increment(&(ctr));
+        if (((ctr.overflow) == 1)) {
+            break;
+        }
+    }
+    counter_reset(&(ctr));
+    return (ctr.count);
+}
+
+Tuple_DevicePtr_soul16_Omen_SystemError test_multi_device_op(Device* primary, uint16_t cmd) {
+    Tuple_DevicePtr_soul16_Omen_SystemError __ret; // unified return slot for destined RAII
+    
+    primary->__stance = Device_Active;
+    if ((cmd == 0)) {
+        primary->__stance = Device_Fault;
+        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ primary, (Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_HardwareFault } };
+        goto __destined_6;
+    }
+    if ((cmd == 1)) {
+        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ primary, (Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_Timeout } };
+        goto __destined_6;
+    }
+    __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ primary, (Omen_soul16_SystemError){ .__is_ruin = 0, .__value = cmd } };
+    goto __destined_6;
+    
+    // --- Destined RAII Cleanup Chain (LIFO order) ---
+    __destined_6:;
+    if (((primary->__stance) != Device_Fault)) {
+        uint8_t ack = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x20)); __tmp; });
+    }
+    __destined_5:;
+    primary->__stance = Device_Idle;
+    return __ret;
+}
+
+void test_legion_usage() {
+    SectorCache cache = (SectorCache){ .sector_lba = 0, .access_count = 0, .is_dirty = 0, .flags = 0 };
+    (cache.sector_lba) = 0x00000001;
+    (cache.access_count) = ((cache.access_count) + 1);
+    (cache.is_dirty) = 1;
+}
+
+void test_divine_all_branches() {
+    Device dev = (Device){ .__stance = Device_Idle, .device_id = 99, .error_code = 0, .flags = 0 };
+    { // --- divine block scope ---
+    /* --- divine: pattern match on Omen + ownership rebinding --- */
+    __auto_type __result = test_multi_device_op(&(dev), 5);
+    dev = *(__result.__elem0); /* <~ ownership rebound (deref) */
+    
+    if (!__result.__elem1.__is_ruin) { /* success */
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint16_t result = __result.__elem1.__value;
+        uint16_t r = result;
+        if ((r > 0)) {
+            uint8_t dummy = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+        }
+        for (int16_t i = 0; (i < r); i = (i + 1)) {
+            asm volatile("outb %0, %1" :: "a"((uint8_t)(0x20)), "d"((uint16_t)0x20));
+        }
+    }
+    else if (__result.__elem1.__is_ruin && __result.__elem1.__ruin == SystemError_HardwareFault) {
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        kernel_panic(((Cgil_Scroll){ .ptr = (const uint8_t*)"Fatal hardware fault", .len = 20 }));
+    }
+    else if (__result.__elem1.__is_ruin && __result.__elem1.__ruin == SystemError_Timeout) {
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint8_t status = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x1F7)); __tmp; });
+        if ((status == 0)) {
+            uint8_t dummy = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+        }
+    }
+    else { /* catch-all ruin */
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint16_t err = __result.__elem1.__ruin;
+        uint16_t error_val = err;
+        uint8_t dummy = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x20)); __tmp; });
+    }
+    
+    } // --- end divine block ---
+    dev.__stance = Device_Idle;
+    { // --- divine block scope ---
+    /* --- divine: pattern match on Omen + ownership rebinding --- */
+    __auto_type __result = test_destined_conditional(&(dev), 3);
+    dev = *(__result.__elem0); /* <~ ownership rebound (deref) */
+    
+    if (!__result.__elem1.__is_ruin) { /* success */
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint16_t v = __result.__elem1.__value;
+        uint16_t used = v;
+    }
+    else { /* catch-all ruin */
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint16_t err = __result.__elem1.__ruin;
+        uint16_t e = err;
+    }
+    
+    } // --- end divine block ---
+    dev.__stance = Device_Idle;
+}
+
+// extern: do_only_thing (declared via conjure)
+void test_single_variant_rank() {
+    Device dev = (Device){ .__stance = Device_Idle, .device_id = 0, .error_code = 0, .flags = 0 };
+    uint8_t d = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x20)); __tmp; });
+}
+
+void test_deep_nesting_in_divine() {
+    Device dev = (Device){ .__stance = Device_Idle, .device_id = 7, .error_code = 0, .flags = 0 };
+    { // --- divine block scope ---
+    /* --- divine: pattern match on Omen + ownership rebinding --- */
+    __auto_type __result = test_destined_conditional(&(dev), 10);
+    dev = *(__result.__elem0); /* <~ ownership rebound (deref) */
+    
+    if (!__result.__elem1.__is_ruin) { /* success */
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint16_t val = __result.__elem1.__value;
+        for (int16_t i = 0; (i < val); i = (i + 1)) {
+            if ((i == 3)) {
+                continue;
+            }
+            if ((i == 7)) {
+                break;
+            }
+            while ((val > 100)) {
+                val = (val - 1);
+                if ((val == 50)) {
+                    break;
+                }
+            }
+            uint8_t dummy = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+        }
+        if ((val > 5)) {
+            if ((val > 8)) {
+                uint8_t d = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x1F7)); __tmp; });
+            }
+            else if ((val > 6)) {
+                uint8_t d = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
+            }
+            else {
+                uint8_t d = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x20)); __tmp; });
+            }
+        }
+    }
+    else { /* catch-all ruin */
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint16_t err = __result.__elem1.__ruin;
+        for (int16_t j = 0; (j < err); j = (j + 1)) {
+            if ((j == 1)) {
+                break;
+            }
+            asm volatile("outb %0, %1" :: "a"((uint8_t)(0x20)), "d"((uint16_t)0x20));
+        }
+    }
+    
+    } // --- end divine block ---
+    dev.__stance = Device_Idle;
+}
+
 int16_t main() {
-    int16_t prim_result = test_all_primitives(100, 200, 300, 400, 0x1F0, 0xAB, 1)    ;
+    int16_t prim_result = test_all_primitives(100, 200, 300, 400, 0x1F0, 0xAB, 1);
+    uint16_t cf_result = test_control_flow(10);
+    test_address_of();
+    test_stance_transitions();
+    int16_t op_result = test_all_operators(5, 3, 10);
+    test_sigil_init();
+    test_string_literals();
+    test_portline_contexts();
+    test_leyline_contexts();
+    uint16_t ctr_result = test_counter();
+    test_legion_usage();
+    test_divine_all_branches();
+    test_deep_nesting_in_divine();
     return prim_result;
 }
 

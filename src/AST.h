@@ -50,6 +50,8 @@
 // interface below can reference them before their full definitions.
 // =============================================================================
 
+struct TypeInfo;
+
 // -- Declarations --
 struct ProgramNode;
 struct GrimoireDecl;
@@ -81,6 +83,8 @@ struct LiteralExpr;
 struct IdentifierExpr;
 struct CallExpr;
 struct AddressOfExpr;
+struct IndexExpr;
+struct StructInitExpr;
 
 // =============================================================================
 // THE VISITOR INTERFACE
@@ -126,6 +130,8 @@ public:
     virtual void visit(IdentifierExpr* node) = 0;
     virtual void visit(CallExpr*       node) = 0;
     virtual void visit(AddressOfExpr*  node) = 0;
+    virtual void visit(IndexExpr*      node) = 0;
+    virtual void visit(StructInitExpr* node) = 0;
 };
 
 // =============================================================================
@@ -171,6 +177,13 @@ struct Param {
 struct ElifBranch {
     std::unique_ptr<Expr>      condition; // nullptr for a bare 'else'
     std::unique_ptr<BlockStmt> body;
+};
+
+// One field in a struct initializer: fieldName: value
+// e.g., the "length: 64" part of "Packet { length: 64, checksum: 0 }"
+struct StructFieldInit {
+    Token                 name;   // The field name token (e.g., "length")
+    std::unique_ptr<Expr> value;  // The initializer expression
 };
 
 // Represents one branch inside a divine { } block.
@@ -459,7 +472,8 @@ struct ForeStmt : public Stmt {
     Token                      initVar;     // e.g., i
     std::unique_ptr<Expr>      initValue;   // e.g., 0
     std::unique_ptr<Expr>      condition;   // e.g., i < 10
-    std::unique_ptr<Expr>      increment;   // e.g., i++ (as a postfix expression)
+    std::unique_ptr<Expr>      increment;   // Left side (e.g., i)
+    std::unique_ptr<Expr>      incValue;    // NEW: Right side (e.g., i + 1)
     std::unique_ptr<BlockStmt> body;
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
@@ -522,7 +536,13 @@ struct VarDeclStmt : public Stmt {
     Token typeToken;                      // e.g., MARK16 or the IDENT "Device"
     Token name;                           // e.g., "x" or "dev"
     std::unique_ptr<Expr> initializer;    // The expression after '=', can be null
+    // Is this an array declaration? e.g., deck[80] rune name;
+    bool  isArray         = false;
+    Token arraySizeToken;   // The size token: "80" in deck[80]
+    // When isArray = true, CodeGen emits: cType name[size];
+    // When isArray = false (default), CodeGen emits: cType name;
 
+    VarDeclStmt() = default;
     VarDeclStmt(Token typeToken, Token name, std::unique_ptr<Expr> initializer)
         : typeToken(std::move(typeToken)), name(std::move(name)), initializer(std::move(initializer)) {}
 
@@ -571,6 +591,12 @@ struct UnaryExpr : public Expr {
 struct PostfixExpr : public Expr {
     std::unique_ptr<Expr> operand;
     Token                 op;      // The '?' token
+    // The resolved Omen TypeInfo, set by SemanticAnalyzer during Pass 2.
+    // CodeGen reads this to:
+    //   a) Know the concrete Omen typedef name for the _tmp variable type.
+    //   b) Detect abyss Omens (no __value field) and suppress __value access.
+    // If nullptr, CodeGen falls back to __auto_type (should not happen after SA).
+   std::shared_ptr<TypeInfo> resolvedOmenType = nullptr;
 
     PostfixExpr(std::unique_ptr<Expr> operand, Token op)
         : operand(std::move(operand)), op(op) {
@@ -643,5 +669,58 @@ struct AddressOfExpr : public Expr {
         : operand(std::move(operand)) {
         token = ampToken; // The '&' token
     }
+    void accept(ASTVisitor& visitor) override { visitor.visit(this); }
+};
+
+// Array subscript: target[index]
+// e.g., vga_row[col], cache[i].sector_id
+//
+// Used for:
+//   - deck array access: deck[80] rune buf -> buf[i]
+//   - leyline array access: vga_buffer[offset]
+//
+// CodeGen emits: (target)[index]
+// The parentheses around target prevent ambiguity when target is complex.
+struct IndexExpr : public Expr {
+    std::unique_ptr<Expr> target; // The array-like expression being subscripted
+    std::unique_ptr<Expr> index;  // The subscript expression
+
+    IndexExpr(std::unique_ptr<Expr> t, std::unique_ptr<Expr> i, Token bracket)
+        : target(std::move(t)), index(std::move(i)) {
+        token = bracket; // The '[' token — source location for errors
+    }
+    void accept(ASTVisitor& visitor) override { visitor.visit(this); }
+};
+
+// Struct/sigil initializer expression: TypeName { field: value, ... }
+// e.g., Packet { length: 64, checksum: 0xABCD, type_byte: 0x01, sequence: 100 }
+// e.g., Device:Idle { device_id: 1, error_code: 0, flags: 0 }
+//
+// This appears as the RHS of VarDeclStmt:
+//   sigil Packet pkt = Packet { length: 64, ... };
+//
+// STANCE-PREFIXED FORM:
+//   sigil Device dev = Device:Idle { device_id: 0, ... }
+//   The stance is parsed as part of the type prefix (IdentifierExpr with stanceName).
+//   typeName.lexeme = "Device", stanceName.lexeme = "Idle"
+//
+// CodeGen emits GNU designated initializer compound literal:
+//   (Packet){ .length = 64, .checksum = 0xABCD, .type_byte = 0x01, .sequence = 100 }
+//
+// For stance-prefixed structs, CodeGen also emits the __stance field:
+//   (Device){ .__stance = Device_Idle, .device_id = 0, .error_code = 0, .flags = 0 }
+//
+// CONSTRAINT (enforced by Semantic Analyzer):
+//   A StructInitExpr compound literal MUST NOT be passed to a conjure spell
+//   by non-owned pointer, as the compound literal's lifetime ends at the
+//   statement boundary and the external C function cannot be inspected for
+//   pointer retention. Passing to conjure by value (copy) is always safe.
+struct StructInitExpr : public Expr {
+    Token typeName;    // The sigil/legion type name (e.g., "Packet", "Device")
+    Token stanceName;  // Optional stance prefix (e.g., "Idle" for Device:Idle { ... })
+                       // Empty lexeme means no stance prefix.
+
+    std::vector<StructFieldInit> fields; // Field initializers in source order
+
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };

@@ -261,10 +261,16 @@ std::unique_ptr<SpellDecl> Parser::parseSpellDecl(bool isTopLevel) {
         } while (match({TokenType::COMMA}));
         consume(TokenType::RPAREN, "Expected ')' after tuple return type.");
     } else {
-        // Single return type: scroll, mark16, abyss, etc.
+        // Single return type
         ReturnTypeInfo ri;
-        ri.typeToken = consumeType("Expected a valid return type.");
-        ri.isPointer = false;
+        if (match({TokenType::SIGIL})) {
+            consume(TokenType::STAR, "Expected '*' after 'sigil'.");
+            ri.typeToken = consumeType("Expected sigil type name.");
+            ri.isPointer = true;
+        } else {
+            ri.typeToken = consumeType("Expected a valid return type.");
+            ri.isPointer = false;
+        }
         node->returnTypes.push_back(ri);
     }
 
@@ -465,6 +471,9 @@ std::unique_ptr<ForeStmt> Parser::parseForeStmt() {
     // TODO: For V1, the increment expression is best written as i = i + 1.
     // Full postfix ++ support would require adding a PostfixIncr expression node.
     node->increment = parseExpression();
+    if (match({TokenType::ASSIGN})) {
+        node->incValue = parseExpression();
+    }
 
     consume(TokenType::RPAREN, "Expected ')' after fore header.");
     consume(TokenType::LBRACE, "Expected '{' before fore body.");
@@ -654,16 +663,28 @@ std::unique_ptr<Stmt> Parser::parseExprOrAssignStmt() {
 }
 
 std::unique_ptr<Stmt> Parser::parseVarDeclStmt(Token typeToken) {
-    // We already ate the type token (e.g., 'mark16' or 'Device'). Now get the name.
-    Token varName = consume(TokenType::IDENT, "Expected variable name.");
+    auto node = std::make_unique<VarDeclStmt>();
+    node->token = typeToken;
 
-    std::unique_ptr<Expr> initializer = nullptr;
+    if (typeToken.type == TokenType::DECK) {
+        node->isArray = true;
+        consume(TokenType::LBRACKET, "Expected '[' after 'deck'.");
+        node->arraySizeToken = consume(TokenType::INT_LIT, "Expected array size literal.");
+        consume(TokenType::RBRACKET, "Expected ']' after array size.");
+        node->typeToken = consumeType("Expected element type after 'deck[N]'.");
+    } else {
+        node->isArray = false;
+        node->typeToken = typeToken;
+    }
+
+    node->name = consume(TokenType::IDENT, "Expected variable name.");
+
     if (match({TokenType::ASSIGN})) {
-        initializer = parseExpression();
+        node->initializer = parseExpression();
     }
 
     consume(TokenType::SEMICOLON, "Expected ';' after variable declaration.");
-    return std::make_unique<VarDeclStmt>(typeToken, varName, std::move(initializer));
+    return node;
 }
 
 // =============================================================================
@@ -723,11 +744,23 @@ std::unique_ptr<Expr> Parser::parsePrecedence(int minPrecedence) {
             auto identExpr = std::make_unique<IdentifierExpr>(tok);
 
             if (match({TokenType::COLON})) {
-                // Stance reference: Disk:Fault
+                // Stance reference: Device:Idle — could be standalone or struct init prefix
                 identExpr->stanceName = consume(TokenType::IDENT, "Expected stance name after ':'.");
+
+                // After Device:Idle, check if { follows — this is a stance-prefixed struct init.
+                // e.g., Device:Idle { device_id: 0, ... }
+                if (check(TokenType::LBRACE) &&
+                    (peekNext().type == TokenType::IDENT || peekNext().type == TokenType::RBRACE)) {
+                    return parseStructInitExpr(tok, identExpr->stanceName);
+                }
             } else if (match({TokenType::SCOPE})) {
                 // Rank variant: DiskError::Timeout
                 identExpr->variantName = consume(TokenType::IDENT, "Expected variant name after '::'.");
+            } else if (check(TokenType::LBRACE) &&
+                    (peekNext().type == TokenType::IDENT || peekNext().type == TokenType::RBRACE)) {
+                // Struct init without stance: Packet { length: 64, ... }
+                Token emptyStance; // default-constructed = empty lexeme
+                return parseStructInitExpr(tok, emptyStance);
             }
 
             left = std::move(identExpr);
@@ -783,6 +816,13 @@ std::unique_ptr<Expr> Parser::parsePrecedence(int minPrecedence) {
             // Postfix '?' — Omen unpack. No right operand needed.
             // read_buffer()? -> if ruin, yield it up; if success, unwrap.
             left = std::make_unique<PostfixExpr>(std::move(left), op);
+            
+        } else if (op.type == TokenType::LBRACKET) {
+            // Array subscript: target[index]
+            // '[' was just consumed as the infix operator.
+            auto idxExpr = std::make_unique<IndexExpr>(std::move(left), parseExpression(), op);
+            consume(TokenType::RBRACKET, "Expected ']' after array index.");
+            left = std::move(idxExpr);
 
         } else if (op.type == TokenType::LPAREN) {
             // Function call: callee(args...)
@@ -790,16 +830,43 @@ std::unique_ptr<Expr> Parser::parsePrecedence(int minPrecedence) {
             left = parseCallExpr(std::move(left));
 
         } else if (op.type == TokenType::ARROW || op.type == TokenType::DOT) {
-            // Member access: ctrl->stance,  node.field
-            // Right side is always a single identifier (not a full expression).
-            Token member = consume(TokenType::IDENT, "Expected member name after '->' or '.'.");
+            // Member access
+            Token member;
+            if (check(TokenType::STANCE)) {
+                member = advance(); // Allow 'stance' keyword as a member name
+            } else {
+                member = consume(TokenType::IDENT, "Expected member name after '->' or '.'.");
+            }
             auto memberExpr = std::make_unique<IdentifierExpr>(member);
             left = std::make_unique<BinaryExpr>(std::move(left), op, std::move(memberExpr));
 
         } else {
-            // Standard binary operator: +, -, *, /, ==, !=, <, >, ~>, <~, |
-            // Parse right side at (prec + 1) for left-associativity.
             auto right = parsePrecedence(prec + 1);
+
+            // DESUGAR WEAVE OPERATOR (~>)
+            // Intercepts a ~> f(b) AND a ~> f(b)? 
+            if (op.type == TokenType::WEAVE) {
+                CallExpr* callRight = dynamic_cast<CallExpr*>(right.get());
+                PostfixExpr* postRight = nullptr;
+                
+                // If not a direct call, check if it's wrapped in a '?' Omen unpack
+                if (!callRight) {
+                    postRight = dynamic_cast<PostfixExpr*>(right.get());
+                    if (postRight) {
+                        callRight = dynamic_cast<CallExpr*>(postRight->operand.get());
+                    }
+                }
+
+                if (callRight) {
+                    // Inject the left expression as the first argument
+                    callRight->args.insert(callRight->args.begin(), std::move(left));
+                    callRight->argIsOwned.insert(callRight->argIsOwned.begin(), false);
+                    
+                    left = std::move(right); 
+                    continue; 
+                }
+            }
+
             left = std::make_unique<BinaryExpr>(std::move(left), op, std::move(right));
         }
     }
@@ -828,6 +895,30 @@ std::unique_ptr<Expr> Parser::parseCallExpr(std::unique_ptr<Expr> callee) {
 
     consume(TokenType::RPAREN, "Expected ')' after function arguments.");
     return callNode;
+}
+
+std::unique_ptr<StructInitExpr> Parser::parseStructInitExpr(Token typeName, Token stanceName) {
+    auto node = std::make_unique<StructInitExpr>();
+    node->token     = typeName;
+    node->typeName  = typeName;
+    node->stanceName = stanceName;  // empty lexeme if no stance prefix
+
+    consume(TokenType::LBRACE, "Expected '{' in struct initializer.");
+
+    // Parse field initializers: fieldName: value
+    // Supports trailing comma and empty initializer list {}.
+    while (!check(TokenType::RBRACE) && !isAtEnd()) {
+        StructFieldInit field;
+        field.name  = consume(TokenType::IDENT,  "Expected field name in struct initializer.");
+        consume(TokenType::COLON, "Expected ':' after field name. Use 'fieldName: value' syntax.");
+        field.value = parseExpression();
+        node->fields.push_back(std::move(field));
+
+        if (!match({TokenType::COMMA})) break; // trailing comma optional
+    }
+
+    consume(TokenType::RBRACE, "Expected '}' after struct initializer fields.");
+    return node;
 }
 
 // Maps each infix operator token type to its binding power (precedence level).
@@ -863,6 +954,7 @@ int Parser::getPrecedence(TokenType type) const {
         case TokenType::WEAVE:     return 3; // ~>  Weave / pipeline
         case TokenType::REV_WEAVE: return 2; // <~  Reverse weave / extract
         case TokenType::PIPE:      return 1; // |   Omen union (lowest)
+        case TokenType::LBRACKET:  return 90;
         default:                   return 0; // Not an infix operator
     }
 }
