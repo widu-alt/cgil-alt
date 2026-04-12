@@ -106,6 +106,7 @@ public:
     void visit(WhirlStmt*    node) override;
     void visit(DestinedStmt* node) override;
     void visit(DivineStmt*   node) override;
+    void visit(VarDeclStmt*  node) override;
 
     // --- Expressions ---
     void visit(BinaryExpr*     node) override;

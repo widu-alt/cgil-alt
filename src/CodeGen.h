@@ -112,6 +112,7 @@ public:
     void visit(WhirlStmt*    node) override;
     void visit(DestinedStmt* node) override;
     void visit(DivineStmt*   node) override;
+    void visit(VarDeclStmt*  node) override;
 
     void visit(BinaryExpr*     node) override;
     void visit(UnaryExpr*      node) override;

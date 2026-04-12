@@ -653,6 +653,33 @@ void SemanticAnalyzer::visit(AssignStmt* node) {
     // V1.5 TODO: Validate direct writes to __stance are a compile error.
 }
 
+void SemanticAnalyzer::visit(VarDeclStmt* node) {
+    if (isPassOne) return;
+
+    // 1. Ensure the type actually exists
+    auto varType = resolveType(node->typeToken);
+
+    // 2. Evaluate the right side (if it exists) to type-check it
+    if (node->initializer) {
+        auto initType = evaluate(node->initializer.get());
+        
+        // V1.5 TODO: Add strict type-compatibility checking here!
+        // Right now, it evaluates it to catch errors inside the expression, 
+        // but it will blindly allow mark32 to be shoved into a mark16 slot.
+        (void)initType; 
+    }
+
+    // 3. Register it in the current scope
+    // (name, type, isOwned, stanceName, isHardware)
+    symbols.declare(
+        node->name.lexeme, 
+        varType, 
+        false, 
+        "", 
+        false
+    );
+}
+
 // =============================================================================
 // EXPRESSION VISITORS
 // =============================================================================

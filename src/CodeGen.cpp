@@ -1021,6 +1021,28 @@ void CodeGenVisitor::visit(DivineStmt* node) {
     emitLine("");
 }
 
+void CodeGenVisitor::visit(VarDeclStmt* node) {
+    if (currentPhase != Phase::IMPLEMENTATIONS) return;
+
+    indent();
+    
+    // Map Cgil types (mark16) to C types (int16_t)
+    std::string cType = getCType(node->typeToken); 
+    
+    emit(cType + " " + node->name.lexeme);
+
+    if (node->initializer) {
+        emit(" = ");
+        
+        // This is the magic part! Because we already upgraded LiteralExpr 
+        // to wrap strings in Cgil_Scroll, simply calling accept() here 
+        // automatically fixes the String-to-Scroll Collision edge case!
+        node->initializer->accept(*this);
+    }
+
+    emitLine(";");
+}
+
 // =============================================================================
 // EXPRESSION VISITORS
 // Expressions emit inline — NO newlines, NO semicolons.

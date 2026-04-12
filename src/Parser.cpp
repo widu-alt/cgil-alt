@@ -320,6 +320,23 @@ std::unique_ptr<HardwareDecl> Parser::parseHardwareDecl() {
 // Routes to the correct statement parser. Falls through to parseExprOrAssignStmt
 // for everything that does not start with a recognized keyword.
 std::unique_ptr<Stmt> Parser::parseStatement() {
+    // Intercept Primitive Types
+    if (check(TokenType::MARK16) || check(TokenType::MARK32) ||
+        check(TokenType::SOUL16) || check(TokenType::SOUL32) ||
+        check(TokenType::ADDR)   || check(TokenType::FLOW)   ||
+        check(TokenType::RUNE)   || check(TokenType::OATH)   ||
+        check(TokenType::SCROLL) || check(TokenType::ABYSS)  ||
+        check(TokenType::DECK)) {
+        Token typeToken = advance();
+        return parseVarDeclStmt(typeToken);
+    }
+
+    // Intercept Sigil/Legion local declarations (e.g., sigil Device my_dev = ...)
+    if (match({TokenType::SIGIL, TokenType::LEGION})) {
+        Token typeToken = consume(TokenType::IDENT, "Expected type name after sigil/legion.");
+        return parseVarDeclStmt(typeToken);
+    }
+    
     if (match({TokenType::IF}))       return parseIfStmt();
     if (match({TokenType::FORE}))     return parseForeStmt();
     if (match({TokenType::WHIRL}))    return parseWhirlStmt();
@@ -634,6 +651,19 @@ std::unique_ptr<Stmt> Parser::parseExprOrAssignStmt() {
 
     consume(TokenType::SEMICOLON, "Expected ';' after expression statement.");
     return std::make_unique<ExprStmt>(std::move(expr));
+}
+
+std::unique_ptr<Stmt> Parser::parseVarDeclStmt(Token typeToken) {
+    // We already ate the type token (e.g., 'mark16' or 'Device'). Now get the name.
+    Token varName = consume(TokenType::IDENT, "Expected variable name.");
+
+    std::unique_ptr<Expr> initializer = nullptr;
+    if (match({TokenType::ASSIGN})) {
+        initializer = parseExpression();
+    }
+
+    consume(TokenType::SEMICOLON, "Expected ';' after variable declaration.");
+    return std::make_unique<VarDeclStmt>(typeToken, varName, std::move(initializer));
 }
 
 // =============================================================================

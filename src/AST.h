@@ -71,6 +71,7 @@ struct ForeStmt;
 struct WhirlStmt;
 struct DestinedStmt;
 struct DivineStmt;
+struct VarDeclStmt;
 
 // -- Expressions --
 struct BinaryExpr;
@@ -115,6 +116,7 @@ public:
     virtual void visit(WhirlStmt*    node) = 0;
     virtual void visit(DestinedStmt* node) = 0;
     virtual void visit(DivineStmt*   node) = 0;
+    virtual void visit(VarDeclStmt*  node) = 0;
 
     // Expressions
     virtual void visit(BinaryExpr*     node) = 0;
@@ -511,6 +513,19 @@ struct DivineStmt : public Stmt {
     Token                      targetVar;  // my_disk
     std::unique_ptr<Expr>      spellCall;  // fetch_sector(own &my_disk, 0x0500)
     std::vector<DivineBranch>  branches;
+    void accept(ASTVisitor& visitor) override { visitor.visit(this); }
+};
+
+// mark16 x = 5;
+// sigil Device dev = Device:Idle { ... };
+struct VarDeclStmt : public Stmt {
+    Token typeToken;                      // e.g., MARK16 or the IDENT "Device"
+    Token name;                           // e.g., "x" or "dev"
+    std::unique_ptr<Expr> initializer;    // The expression after '=', can be null
+
+    VarDeclStmt(Token typeToken, Token name, std::unique_ptr<Expr> initializer)
+        : typeToken(std::move(typeToken)), name(std::move(name)), initializer(std::move(initializer)) {}
+
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 

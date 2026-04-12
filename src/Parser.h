@@ -127,7 +127,8 @@ private:
 
     // Handles expression statements (f();) and assignment statements (x = y;).
     std::unique_ptr<Stmt>          parseExprOrAssignStmt();
-
+    std::unique_ptr<Stmt>          parseVarDeclStmt(Token typeToken);
+    
     // =========================================================================
     // EXPRESSION PARSERS (Pratt / Precedence Climbing)
     // =========================================================================
