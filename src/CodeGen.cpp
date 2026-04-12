@@ -537,7 +537,11 @@ void CodeGenVisitor::visit(SpellDecl* node) {
     signature += ")";
 
     if (currentPhase == Phase::PROTOTYPES) {
-        emitLine(signature + ";");
+        if (node->isConjure) {
+            emitLine("extern " + signature + ";");
+        } else {
+            emitLine(signature + ";");
+        }
         return;
     }
 
@@ -1297,9 +1301,17 @@ void CodeGenVisitor::visit(CallExpr* node) {
 
     // Special case: ruin(DiskError::HardwareFault) — Omen error construction.
     if (ident && ident->token.lexeme == "ruin") {
-        // Emit a compound literal matching the Omen struct ABI.
-        // __is_ruin = 1, __ruin = <discriminant>
-        emit("{ .__is_ruin = 1, .__ruin = ");
+        std::string omenType;
+        if (currentSpell && currentSpell->hasOmen) {
+            if (currentSpell->returnTypes.size() > 1) {
+                omenType = getOmenTypeName(currentSpell->returnTypes[1].typeToken.lexeme, currentSpell->omenErrorType.lexeme);
+            } else if (!currentSpell->returnTypes.empty()) {
+                omenType = getOmenTypeName(currentSpell->returnTypes[0].typeToken.lexeme, currentSpell->omenErrorType.lexeme);
+            }
+        }
+        if (omenType.empty()) omenType = currentReturnTypeName;
+
+        emit("(" + omenType + "){ .__is_ruin = 1, .__ruin = ");
         if (!node->args.empty()) {
             node->args[0]->accept(*this);
         }
@@ -1343,7 +1355,8 @@ void CodeGenVisitor::visit(AddressOfExpr* node) {
         return;
     }
 
-    // Standard C address-of (let GCC handle the 16/64 bit sizing via flags)
+    // Standard C address-of. We rely on cross-compilation flags to handle 
+    // the 64-bit to 16-bit addr conversions for hardware variables.
     emit("&(");
     node->operand->accept(*this);
     emit(")");

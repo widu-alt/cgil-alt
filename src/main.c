@@ -207,14 +207,14 @@ typedef struct {
 // ============================================================
 // PHASE 2: FUNCTION PROTOTYPES
 // ============================================================
-void raw_memcpy(uint16_t dest, uint16_t src, uint16_t len);
-void raw_memset(uint16_t dest, uint8_t val, uint16_t len);
-int16_t raw_memcmp(uint16_t a, uint16_t b, uint16_t len);
-Omen_mark16_ParseResult parse_integer(Cgil_Scroll s);
-Omen_oath_SystemError validate_checksum(uint16_t data, uint16_t len);
-Tuple_DevicePtr_abyss_Omen_SystemError acquire_device(Device* dev, uint16_t id);
-__attribute__((noreturn)) void kernel_panic(Cgil_Scroll msg);
-__attribute__((noreturn)) void reboot();
+extern void raw_memcpy(uint16_t dest, uint16_t src, uint16_t len);
+extern void raw_memset(uint16_t dest, uint8_t val, uint16_t len);
+extern int16_t raw_memcmp(uint16_t a, uint16_t b, uint16_t len);
+extern Omen_mark16_ParseResult parse_integer(Cgil_Scroll s);
+extern Omen_oath_SystemError validate_checksum(uint16_t data, uint16_t len);
+extern Tuple_DevicePtr_abyss_Omen_SystemError acquire_device(Device* dev, uint16_t id);
+extern __attribute__((noreturn)) void kernel_panic(Cgil_Scroll msg);
+extern __attribute__((noreturn)) void reboot();
 void timer_irq(void* __irq_frame);
 void keyboard_irq(void* __irq_frame);
 void ata_irq(void* __irq_frame);
@@ -248,7 +248,7 @@ uint16_t test_counter();
 Tuple_DevicePtr_soul16_Omen_SystemError test_multi_device_op(Device* primary, uint16_t cmd);
 void test_legion_usage();
 void test_divine_all_branches();
-Omen_abyss_SingleVariant do_only_thing();
+extern Omen_abyss_SingleVariant do_only_thing();
 void test_single_variant_rank();
 void test_deep_nesting_in_divine();
 int16_t main();
@@ -400,7 +400,7 @@ Tuple_DevicePtr_soul16_Omen_SystemError test_destined_unconditional(Device* dev,
     
     dev->__stance = Device_Active;
     if ((id == 0)) {
-        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_InvalidSector } };
+        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError)(Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_InvalidSector } };
         goto __destined_1;
     }
     __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 0, .__value = id } };
@@ -418,7 +418,7 @@ Tuple_DevicePtr_soul16_Omen_SystemError test_destined_conditional(Device* dev, u
     dev->__stance = Device_Active;
     if ((id == 0)) {
         dev->__stance = Device_Fault;
-        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_HardwareFault } };
+        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError)(Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_HardwareFault } };
         goto __destined_2;
     }
     __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 0, .__value = id } };
@@ -437,12 +437,12 @@ Tuple_DevicePtr_soul16_Omen_SystemError test_destined_multiple(Device* dev, uint
     
     dev->__stance = Device_Active;
     if ((id == 0)) {
-        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_Timeout } };
+        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError)(Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_Timeout } };
         goto __destined_4;
     }
     if ((id == 1)) {
         dev->__stance = Device_Fault;
-        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_HardwareFault } };
+        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError)(Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_HardwareFault } };
         goto __destined_4;
     }
     __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 0, .__value = id } };
@@ -755,11 +755,11 @@ Tuple_DevicePtr_soul16_Omen_SystemError test_multi_device_op(Device* primary, ui
     primary->__stance = Device_Active;
     if ((cmd == 0)) {
         primary->__stance = Device_Fault;
-        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ primary, (Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_HardwareFault } };
+        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ primary, (Omen_soul16_SystemError)(Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_HardwareFault } };
         goto __destined_6;
     }
     if ((cmd == 1)) {
-        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ primary, (Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_Timeout } };
+        __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ primary, (Omen_soul16_SystemError)(Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_Timeout } };
         goto __destined_6;
     }
     __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ primary, (Omen_soul16_SystemError){ .__is_ruin = 0, .__value = cmd } };
