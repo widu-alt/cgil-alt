@@ -179,6 +179,64 @@ private:
     // Use this instead of typeRegistry[] which silently inserts null entries.
     std::shared_ptr<TypeInfo> resolveType(Token nameToken);
 
+    // =========================================================================
+    // PLAN A: Centralized FPU Warning
+    // =========================================================================
+    //
+    // Emit a warning (or hard error inside warden spells) when a 'flow' type
+    // is encountered anywhere. Called from every site that processes a type token:
+    //   - visit(VarDeclStmt*)     — local variable declarations
+    //   - visit(SpellDecl*)       — parameter types and return types
+    //   - visit(SigilDecl*)       — struct field types
+    //   - visit(ForeStmt*)        — loop variable type
+    //
+    // CONTEXT RULES (ratified with Gemini's null-safety amendment):
+    //   Inside a warden spell (currentSpell != nullptr && currentSpell->isWarden):
+    //     → Hard semantic ERROR. FPU in an ISR is a guaranteed kernel panic.
+    //   Inside a normal spell or at global scope (currentSpell == nullptr):
+    //     → Stderr WARNING. FPU in a kernel is dangerous but not always fatal
+    //       if the OS explicitly saves/restores FPU state.
+    //
+    // The null check on currentSpell is mandatory — SigilDecl fields are
+    // processed at global scope where currentSpell is nullptr. Checking
+    // isWarden without the null guard is a segfault.
+    void warnIfFlow(Token typeToken);
+
+    // =========================================================================
+    // PLAN B: Lvalue Validation Helper
+    // =========================================================================
+    //
+    // Stateless structural check: returns true if the given expression is a
+    // valid assignment target (lvalue) in Cgil.
+    //
+    // VALID LVALUES (true):
+    //   IdentifierExpr     — where stanceName.empty() && variantName.empty()
+    //                        (bare variable name like 'x', 'my_disk', 'ctrl')
+    //   BinaryExpr(ARROW)  — pointer member access: ctrl->field
+    //   BinaryExpr(DOT)    — value member access: pkt.length
+    //   IndexExpr           — array subscript: buf[i]
+    //   UnaryExpr(STAR)    — pointer dereference: *ptr
+    //                        (ratified addition from Gemini's amendment)
+    //
+    // INVALID LVALUES (false) — everything else, including:
+    //   IdentifierExpr where !stanceName.empty() — Disk:Fault is a constant
+    //   IdentifierExpr where !variantName.empty() — DiskError::Timeout is a constant
+    //                        (ratified addition from Gemini's amendment)
+    //   LiteralExpr        — 5 = x is illegal
+    //   CallExpr           — foo() = x is illegal
+    //   PostfixExpr        — val? = x is illegal
+    //   AddressOfExpr      — &x = y is illegal
+    //   BinaryExpr(+/-/*/etc.) — (a + b) = x is illegal
+    //
+    // Called from:
+    //   visit(AssignStmt*)  — first line after pass guard
+    //   visit(AssignExpr*)  — first line after pass guard
+    //
+    // This is a FREE FUNCTION in spirit (no class state needed), but implemented
+    // as a private member for access to Token types and error() helper.
+    // It does NOT touch currentExprType, typeRegistry, or symbols.
+    bool isLvalue(Expr* expr) const;
+
     // Register all built-in Cgil primitive types in the typeRegistry.
     // Called once in the constructor before any source file is analyzed.
     //

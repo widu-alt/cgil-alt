@@ -277,8 +277,9 @@ struct ProgramNode : public ASTNode {
 // The 'isPact' flag allows the semantic analyzer to warn when pact is used
 // in kernel context (Ring 3 libraries assume an OS beneath them).
 struct GrimoireDecl : public Decl {
-    Token path;           // The header name token (e.g., "hardware_defs")
+    Token path;           // The header name token (e.g., "hardware_defs" or "my_driver.h")
     bool  isPact = false; // false = grimoire (Ring 0), true = pact (Ring 3)
+    bool  isSystem = true; // NEW: true = <file.h>, false = "file.h"
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 

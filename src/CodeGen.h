@@ -280,9 +280,27 @@ private:
     // LIFO order means we emit labels in reverse: last declared fires first.
     std::vector<DestinedStmt*> currentDestinedBlocks;
 
-    // Counter for generating unique __destined_N label names across the program.
-    // Each new spell resets its own local counter.
+    // Global counter for generating unique __destined_N label names.
+    // Acts as a sequential label allocator across the entire program.
+    // Reset to 0 in generate() at the start of each compiler run to support
+    // multi-file compilation within a single process lifetime.
+    //
+    // IMPORTANT: This counter is incremented ONCE per spell, atomically, at the
+    // START of spell body emission (not at label emission time). This guarantees
+    // that PostfixExpr's goto target calculation is stable throughout body emission.
     int globalDestinedCounter = 0;
+
+    // The base label index allocated for the current spell's destined blocks.
+    // Captured atomically at the start of body emission:
+    //   currentSpellDestinedBase = globalDestinedCounter;
+    //   globalDestinedCounter += currentDestinedBlocks.size();
+    //
+    // All goto target calculations within a spell use this base, not the
+    // mutable globalDestinedCounter. This eliminates the race condition where
+    // PostfixExpr reads globalDestinedCounter before labels have been allocated.
+    //
+    // Value is 0 when not inside a destined spell. Reset at spell cleanup.
+    int currentSpellDestinedBase = 0;
 
     // The C return type string for the current spell being emitted.
     // Used in YieldStmt when emitting 'return __ret;' in destined mode.

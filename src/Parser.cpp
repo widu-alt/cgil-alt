@@ -67,27 +67,32 @@ std::unique_ptr<GrimoireDecl> Parser::parseGrimoireDecl() {
     node->token  = previous();                                // grimoire or pact token
     node->isPact = (previous().type == TokenType::PACT);
 
-    consume(TokenType::LT, "Expected '<' after grimoire/pact.");
+    if (check(TokenType::STRING_LIT)) {
+        // LOCAL INCLUDE: grimoire "local_file.h";
+        node->isSystem = false;
+        node->path = advance(); // Consume the string literal token
+    } else {
+        // SYSTEM INCLUDE: grimoire <system_file.h>;
+        node->isSystem = true;
+        consume(TokenType::LT, "Expected '<' or string literal after grimoire/pact.");
 
-    // THE FIX: Eat tokens and stitch them together until we hit '>'
-    std::string pathStr = "";
-    while (!check(TokenType::GT) && !isAtEnd()) {
-        pathStr += advance().lexeme;
+        std::string pathStr = "";
+        while (!check(TokenType::GT) && !isAtEnd()) {
+            pathStr += advance().lexeme;
+        }
+
+        if (pathStr.empty()) {
+            throw std::runtime_error("[Parse Error] Expected header file name between < >");
+        }
+
+        Token pathToken = previous(); 
+        pathToken.lexeme = pathStr;   
+        node->path = pathToken;
+
+        consume(TokenType::GT, "Expected '>' after header name.");
     }
 
-    // Check if they left it empty (e.g., grimoire <>;)
-    if (pathStr.empty()) {
-        throw std::runtime_error("[Parse Error] Expected header file name between < >");
-    }
-
-    // Synthesize a single Token to hold the full stitched path
-    Token pathToken = previous(); // Use the last token for line/col info
-    pathToken.lexeme = pathStr;   // E.g., "stdio.h" or "sys/types.h"
-    node->path = pathToken;
-
-    consume(TokenType::GT, "Expected '>' after header name.");
-    consume(TokenType::SEMICOLON, "Expected ';' after grimoire declaration.");
-
+    consume(TokenType::SEMICOLON, "Expected ';' after grimoire/pact declaration.");
     return node;
 }
 
@@ -343,16 +348,35 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         return parseVarDeclStmt(typeToken);
     }
 
-    // Intercept Sigil/Legion local declarations (e.g., sigil Device my_dev = ...)
+    // Intercept sigil/legion local declarations with explicit keyword:
+    //   sigil Device my_dev = ...;     legion SectorCache cache = ...;
     if (match({TokenType::SIGIL, TokenType::LEGION})) {
         Token typeToken = consume(TokenType::IDENT, "Expected type name after sigil/legion.");
         return parseVarDeclStmt(typeToken);
     }
 
-    // NEW: Intercept bare sigil declarations: Device dev = ...;
-    // Uses 2-token lookahead (IDENT IDENT) to safely distinguish from normal expressions.
-    if (check(TokenType::IDENT) && peekNext().type == TokenType::IDENT) {
-        Token typeToken = advance(); // Consume the type IDENT
+    // Intercept BARE sigil/legion declarations without the keyword:
+    //   Device my_dev = ...;
+    //
+    // Uses a hardened 3-token lookahead: IDENT IDENT (ASSIGN | SEMICOLON)
+    //
+    // WHY 3 TOKENS, NOT 2:
+    //   The original 2-token check (IDENT IDENT) fired on any two adjacent
+    //   identifiers, including across a missing-semicolon boundary:
+    //     some_call()        <- missing semicolon
+    //     Device dev = ...;  <- IDENT IDENT triggered here, wrong error message
+    //
+    //   With 3 tokens: the third must be '=' or ';' — the only valid
+    //   continuations of a variable declaration. Any other token (LPAREN,
+    //   operator, etc.) means this is NOT a declaration and we fall through.
+    //
+    // NOTE: The duplicate SIGIL/LEGION block that was below this check has
+    //       been removed — it was dead code (the first block always returned).
+    if (check(TokenType::IDENT) &&
+        peekNext().type == TokenType::IDENT &&
+        (peekNextNext().type == TokenType::ASSIGN ||
+         peekNextNext().type == TokenType::SEMICOLON)) {
+        Token typeToken = advance(); // Consume the type name IDENT
         return parseVarDeclStmt(typeToken);
     }
     
@@ -990,6 +1014,14 @@ Token Parser::peek() const {
 Token Parser::peekNext() const {
     if (current + 1 >= (int)tokens.size()) return tokens.back();
     return tokens[current + 1];
+}
+
+// Look two tokens ahead without consuming any token.
+// Mirrors peekNext() with the same bounds-safe pattern.
+// Returns END_OF_FILE (the last token in the stream) if at or near the end.
+Token Parser::peekNextNext() const {
+    if (current + 2 >= (int)tokens.size()) return tokens.back();
+    return tokens[current + 2];
 }
 
 // Return the most recently consumed token.

@@ -163,6 +163,12 @@ private:
     // Returns END_OF_FILE token if at or past the end of the stream.
     Token peekNext() const;
 
+    // Look two tokens ahead without consuming any token.
+    // Used for the 3-token IDENT IDENT ASSIGN/SEMICOLON lookahead in
+    // parseStatement() to harden bare sigil declaration detection.
+    // Returns END_OF_FILE token if at or past the end of the stream.
+    Token peekNextNext() const;
+
     // Return the most recently consumed token.
     Token previous() const;
 

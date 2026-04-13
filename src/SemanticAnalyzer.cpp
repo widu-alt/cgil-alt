@@ -99,9 +99,10 @@ void SemanticAnalyzer::visit(SigilDecl* node) {
         return;
     }
 
-    // Pass 2: Validate field types.
+    // Pass 2: Validate field types and check for FPU usage in struct fields.
     for (auto& field : node->fields) {
-        resolveType(field.type); // Errors if "soul16", "addr", etc. not found
+        warnIfFlow(field.type); // PLAN A: check each field for float type
+        resolveType(field.type);
     }
 
     // Pass 2: Analyze bound spell bodies.
@@ -172,16 +173,22 @@ void SemanticAnalyzer::visit(SpellDecl* node) {
     // Enter the spell's scope. Parameters live here.
     symbols.enterScope();
 
-    // Declare all parameters as symbols with their resolved types and stances.
+    // Declare all parameters as symbols. Also check each for FPU type.
     for (auto& param : node->params) {
-        auto paramType = resolveType(param.type); // Errors if type unknown
+        warnIfFlow(param.type); // PLAN A: check each parameter type
+        auto paramType = resolveType(param.type);
         symbols.declare(
             param.name.lexeme,
             paramType,
             param.isOwned,
-            param.stanceName.lexeme, // "" if no stance constraint
-            false                    // not hardware
+            param.stanceName.lexeme,
+            false
         );
+    }
+
+    // PLAN A: Check each return type for FPU usage.
+    for (const auto& rt : node->returnTypes) {
+        warnIfFlow(rt.typeToken);
     }
 
     // Walk the spell body. Every statement will be analyzed in this scope.
@@ -353,7 +360,8 @@ void SemanticAnalyzer::visit(ForeStmt* node) {
     // Outer scope for the loop variable — it lives for the whole loop.
     symbols.enterScope();
 
-    // Declare the loop variable: mark16 i = 0
+    // PLAN A: Check loop variable type for FPU usage.
+    warnIfFlow(node->initType);
     auto initType = resolveType(node->initType);
     symbols.declare(node->initVar.lexeme, initType);
 
@@ -623,6 +631,22 @@ void SemanticAnalyzer::visit(DivineStmt* node) {
 void SemanticAnalyzer::visit(AssignStmt* node) {
     if (isPassOne) return;
 
+    // PLAN B: Lvalue validation — the impenetrable first shield.
+    // This fires BEFORE any special-case logic (stance transitions, portline
+    // writes, normal assignments) so invalid targets are rejected with a
+    // Cgil source line number rather than a GCC C line number.
+    //
+    // Valid targets: plain identifier, member access (-> or .), array
+    // subscript ([]), pointer dereference (*). Everything else is rejected.
+    if (!isLvalue(node->target.get())) {
+        error(node->target->token,
+              "Invalid assignment target. The left side of '=' must be a "
+              "variable, member access (->field or .field), array subscript ([i]), "
+              "or pointer dereference (*ptr). "
+              "Stance references (Disk:Fault), rank variants (DiskError::Timeout), "
+              "literals, and expression results cannot be assigned to.");
+    }
+
     // Check if the left side is a plain identifier.
     auto* targetIdent = dynamic_cast<IdentifierExpr*>(node->target.get());
 
@@ -670,18 +694,112 @@ void SemanticAnalyzer::visit(AssignStmt* node) {
     // V1.5 TODO: Validate direct writes to __stance are a compile error.
 }
 
+// =============================================================================
+// PLAN A: warnIfFlow() — Centralized FPU Type Warning
+// =============================================================================
+//
+// Every site that processes a type token calls this helper.
+// It is a single enforcement point for the FPU safety rule:
+//
+//   "flow (32-bit float) maps to the x86 FPU register set. Using float in
+//    bare-metal kernel code without explicitly saving and restoring FPU state
+//    (FXSAVE/FXRSTOR or similar) causes the interrupted process's FPU state
+//    to be silently corrupted. In an ISR (warden spell), this is guaranteed
+//    to cause a kernel panic or data corruption."
+//
+// Context-aware severity:
+//   warden spell  → HARD ERROR  (ISR + FPU = definite panic)
+//   normal context → WARNING    (risky but not always fatal)
+//
+// NULL SAFETY (Gemini's amendment):
+//   SigilDecl fields are processed at global scope where currentSpell == nullptr.
+//   We MUST check currentSpell != nullptr before accessing isWarden.
+void SemanticAnalyzer::warnIfFlow(Token typeToken) {
+    if (typeToken.lexeme != "flow") return;
+
+    if (currentSpell != nullptr && currentSpell->isWarden) {
+        // Hard error inside an ISR — this will panic the kernel.
+        error(typeToken,
+              "Cannot use 'flow' (float) in a 'warden spell'. "
+              "ISRs run with the x86 FPU in an undefined state. "
+              "Using float registers here will corrupt the interrupted context "
+              "and cause a kernel panic. Use integer math only in ISRs.");
+    } else {
+        // Warning in normal kernel context.
+        std::cerr << "[Semantic Warning Line " << typeToken.line << " Col " << typeToken.column << "] "
+                  << "Type 'flow' (float) used in kernel context. "
+                  << "FPU register usage without explicit FXSAVE/FXRSTOR "
+                  << "will corrupt interrupted task state. "
+                  << "Ensure FPU context switching is in place before using float.\n";
+    }
+}
+
+// =============================================================================
+// PLAN B: isLvalue() — Stateless Lvalue Validation
+// =============================================================================
+//
+// Structurally determines if an expression is a valid assignment target.
+// This function is STATELESS — it does not read typeRegistry, symbols, or
+// currentExprType. It operates purely on the AST node shape.
+//
+// RATIFIED WHITELIST (from joint Claude + Gemini audit):
+//
+//   IdentifierExpr: valid ONLY if stanceName AND variantName are both empty.
+//     → Disk:Fault is NOT an lvalue (it is a stance constant, not a variable).
+//     → DiskError::Timeout is NOT an lvalue (it is a rank constant).
+//     → my_disk IS an lvalue (plain variable reference).
+//
+//   BinaryExpr(ARROW or DOT): member access is an lvalue.
+//     → ctrl->sector_count = 5   valid
+//     → pkt.length = 64          valid
+//
+//   IndexExpr: array subscript is an lvalue.
+//     → buf[i] = val             valid
+//
+//   UnaryExpr(STAR): pointer dereference is an lvalue.
+//     → *ptr = 5                 valid
+//     (Gemini's amendment — this was missing from the original design.)
+//
+//   EVERYTHING ELSE: not an lvalue.
+//     LiteralExpr, CallExpr, PostfixExpr(?), AddressOfExpr(&x),
+//     BinaryExpr with arithmetic/comparison operators.
+bool SemanticAnalyzer::isLvalue(Expr* expr) const {
+    if (auto* ident = dynamic_cast<IdentifierExpr*>(expr)) {
+        // Plain variable: valid lvalue.
+        // Stance reference (Disk:Fault) or rank variant (DiskError::Timeout):
+        // NOT a valid lvalue — they are compile-time constants.
+        return ident->stanceName.lexeme.empty() && ident->variantName.lexeme.empty();
+    }
+
+    if (auto* binary = dynamic_cast<BinaryExpr*>(expr)) {
+        // Member access via -> or . is a valid lvalue.
+        return binary->op.type == TokenType::ARROW || binary->op.type == TokenType::DOT;
+    }
+
+    if (dynamic_cast<IndexExpr*>(expr)) {
+        // Array subscript is a valid lvalue.
+        return true;
+    }
+
+    if (auto* unary = dynamic_cast<UnaryExpr*>(expr)) {
+        // Pointer dereference (*ptr) is a valid lvalue.
+        // Negation (-x) and other unary ops are NOT.
+        return unary->op.type == TokenType::STAR;
+    }
+
+    // Everything else: LiteralExpr, CallExpr, PostfixExpr, AddressOfExpr,
+    // BinaryExpr with non-member operators — all invalid lvalues.
+    return false;
+}
+
 void SemanticAnalyzer::visit(VarDeclStmt* node) {
     if (isPassOne) return;
 
     auto varType = resolveType(node->typeToken);
 
-    // KERNEL FLOW WARNING: Warn developers about FPU registers in bare-metal context
-    if (node->typeToken.lexeme == "flow") {
-        std::cerr << "[Semantic Warning Line " << node->token.line << "] "
-                  << "Floating-point ('flow') variable '" << node->name.lexeme 
-                  << "' declared in kernel context. "
-                  << "Hardware FPU emulation may cause a kernel panic if not explicitly managed.\n";
-    }
+    // PLAN A: Centralized FPU warning — replaces the old inline check.
+    // warnIfFlow() handles context (warden = error, normal = warning) safely.
+    warnIfFlow(node->typeToken);
 
     std::string initialStance = "";
 
@@ -1242,9 +1360,20 @@ void SemanticAnalyzer::visit(StructInitExpr* node) {
 void SemanticAnalyzer::visit(AssignExpr* node) {
     if (isPassOne) return;
 
-    auto targetType = evaluate(node->target.get());
-    auto valueType = evaluate(node->value.get());
+    // PLAN B: Lvalue validation — same shield as AssignStmt.
+    // Fore loop increments like 'i = i + 1' always have a valid lvalue (IdentifierExpr).
+    // Array increments like 'my_array[i] = val + 1' have IndexExpr — also valid.
+    // Literal increments like '5 = 5 + 1' are caught and rejected here with
+    // a Cgil source location, not a GCC error pointing at generated C.
+    if (!isLvalue(node->target.get())) {
+        error(node->target->token,
+              "Invalid assignment target. The left side of '=' must be a "
+              "variable, member access (->field or .field), array subscript ([i]), "
+              "or pointer dereference (*ptr).");
+    }
 
-    // V1.5 TODO: Strict type compatibility and lvalue validation
+    auto targetType = evaluate(node->target.get());
+    auto valueType  = evaluate(node->value.get());
+    (void)valueType; // V1.5 TODO: strict type compatibility check
     currentExprType = targetType;
 }

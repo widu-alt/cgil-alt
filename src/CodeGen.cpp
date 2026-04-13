@@ -7,6 +7,10 @@
 
 void CodeGenVisitor::generate(ProgramNode* program) {
 
+    // Reset global label counter for this compiler run.
+    // Required for correctness in multi-file compilation within one process.
+    globalDestinedCounter = 0;
+
     // -------------------------------------------------------------------------
     // PRE-PASS: INCLUDES
     // Grimoire includes must appear FIRST in the C file — before all type
@@ -100,10 +104,12 @@ void CodeGenVisitor::generate(ProgramNode* program) {
 // system or build-tree headers, not local relative paths.
 void CodeGenVisitor::visit(GrimoireDecl* node) {
     if (currentPhase != Phase::TYPES) return;
-    // Emit as a system include with angle brackets.
-    // The path token contains just the header name (e.g., "hardware_defs").
-    // We add .h because the parser stores the base name.
-    emitLine("#include <" + node->path.lexeme + ">");
+    
+    if (node->isSystem) {
+        emitLine("#include <" + node->path.lexeme + ">");
+    } else {
+        emitLine("#include \"" + node->path.lexeme + "\"");
+    }
 }
 
 // rank DiskError { Timeout, HardwareFault, InvalidSector }
@@ -570,6 +576,20 @@ void CodeGenVisitor::visit(SpellDecl* node) {
     currentDestinedBlocks = findDestinedBlocks(node->body);
     inDestinedSpell = !currentDestinedBlocks.empty();
 
+    // PLAN D: Atomic label index allocation.
+    // Capture the base index for this spell's destined labels BEFORE any
+    // body emission runs. Increment the global counter by the full block count
+    // immediately so PostfixExpr's goto calculation is stable throughout.
+    //
+    // All subsequent label references within this spell use currentSpellDestinedBase,
+    // NOT globalDestinedCounter (which continues to mutate as more spells are emitted).
+    if (inDestinedSpell) {
+        currentSpellDestinedBase = globalDestinedCounter;
+        globalDestinedCounter += (int)currentDestinedBlocks.size();
+    } else {
+        currentSpellDestinedBase = 0;
+    }
+
     emitLine(signature + " {");
     indentLevel++;
 
@@ -595,14 +615,13 @@ void CodeGenVisitor::visit(SpellDecl* node) {
         emitLine("");
         emitLine("// --- Destined RAII Cleanup Chain (LIFO order) ---");
 
-        // Generate a unique base index for this spell's labels.
-        int baseIdx = globalDestinedCounter;
-        globalDestinedCounter += (int)currentDestinedBlocks.size();
+        // PLAN D: Use currentSpellDestinedBase (captured atomically before body emission).
+        // globalDestinedCounter was already incremented at the start of this spell.
 
         // LIFO: iterate in reverse (last declared = highest index = emitted first).
         for (int i = (int)currentDestinedBlocks.size() - 1; i >= 0; --i) {
             DestinedStmt* d = currentDestinedBlocks[i];
-            int labelIdx = baseIdx + i;
+            int labelIdx = currentSpellDestinedBase + i;
 
             // The label that yields jump to.
             // Label falls through to the next (lower-numbered) label automatically.
@@ -633,6 +652,7 @@ void CodeGenVisitor::visit(SpellDecl* node) {
     inDestinedSpell = false;
     currentDestinedBlocks.clear();
     stancePointerVars.clear();
+    currentSpellDestinedBase = 0; // PLAN D: reset per-spell base for next spell
 
     indentLevel--;
     emitLine("}");
@@ -777,9 +797,17 @@ void CodeGenVisitor::visit(YieldStmt* node) {
 
     if (node->values.empty()) {
         if (inDestinedSpell) {
-            int lastDeclared = globalDestinedCounter + (int)currentDestinedBlocks.size() - 1;
-            emitLine("goto __destined_" + std::to_string(lastDeclared) + ";");
-        } else {
+        // PLAN D: Compute goto target from the stable per-spell base, not the
+        // mutable global counter. The LIFO entry point is the LAST block (highest
+        // index), which naturally falls through to earlier blocks.
+        //
+        // VERIFIED LIFO MATH:
+        //   3 blocks, base = 0: goto targets index 2 (= 0 + 3 - 1).
+        //   LIFO emitter generates labels 2, 1, 0 in that order.
+        //   Execution: label 2 fires first, falls through to 1, falls through to 0.
+        int lifoEntryLabel = currentSpellDestinedBase + (int)currentDestinedBlocks.size() - 1;
+        emitLine("goto __destined_" + std::to_string(lifoEntryLabel) + ";");
+    } else {
             emitLine("return;");
         }
         return;
@@ -1100,7 +1128,10 @@ void CodeGenVisitor::visit(PostfixExpr* node) {
 
     // THE FIX: Unpack the ruin and repackage it into the OUTER spell's exact return type.
     if (inDestinedSpell && !currentDestinedBlocks.empty()) {
-        int lastDeclared = globalDestinedCounter + (int)currentDestinedBlocks.size() - 1;
+        // PLAN D BUGFIX: Use the stable per-spell base, just like YieldStmt.
+        // globalDestinedCounter is pre-incremented now, so reading it here generates
+        // an out-of-bounds label index.
+        int lastDeclared = currentSpellDestinedBase + (int)currentDestinedBlocks.size() - 1;
         if (currentSpell->returnTypes.size() > 1) {
             std::string expectedOmen = getOmenTypeName(currentSpell->returnTypes[1].typeToken.lexeme, currentSpell->omenErrorType.lexeme);
             emit("__ret.__elem1 = (" + expectedOmen + "){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }; ");

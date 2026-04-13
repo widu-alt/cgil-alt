@@ -4,7 +4,7 @@
 // If this file compiles to silent GCC output, the compiler is correct.
 // =============================================================================
 
-grimoire <hardware_defs.h>;
+grimoire "hardware_defs.h";
 
 // =============================================================================
 // SECTION 1: ALL RANK DECLARATIONS
