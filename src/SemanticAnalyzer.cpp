@@ -1,4 +1,7 @@
 #include "SemanticAnalyzer.h"
+#include <functional> // For std::function (Fix 1)
+#include <set>        // For std::set (Fix 2)
+#include <typeinfo>   // For typeid (Supplementary Fix)
 
 // =============================================================================
 // PRIVATE HELPERS
@@ -8,7 +11,26 @@
 // This is the standard way to ask "what type does this expression produce?"
 // Sets currentExprType as a side effect, then returns it.
 std::shared_ptr<TypeInfo> SemanticAnalyzer::evaluate(Expr* node) {
+    // Reset before every evaluation so stale values cannot escape.
+    // If the visitor does not set currentExprType, the nullptr triggers the
+    // assertion below instead of silently returning a wrong type.
+    currentExprType = nullptr;
+
     node->accept(*this);
+
+    // Hard assertion: every expression visitor MUST set currentExprType.
+    // If this fires, a visitor is missing its currentExprType assignment.
+    // This is a compiler development error, not a user error.
+    if (!currentExprType) {
+        // We cannot call error() here because we may not have a valid source
+        // token. Throw a runtime_error that propagates to main.cpp's handler.
+        throw std::runtime_error(
+            "Internal compiler error: expression visitor did not set "
+            "currentExprType. This is a bug in the Cgil compiler itself. "
+            "The expression node type: " +
+            std::string(typeid(*node).name()));
+    }
+
     return currentExprType;
 }
 
@@ -68,6 +90,17 @@ void SemanticAnalyzer::visit(RankDecl* node) {
     typeRegistry[node->name.lexeme] = std::make_shared<TypeInfo>(
         TypeInfo{TypeKind::RANK, node->name.lexeme}
     );
+
+    // FATAL FIX 2: Populate rankVariants so DivineStmt can enforce exhaustiveness.
+    // Store the variant list in declaration order.
+    // Pass 2's visit(DivineStmt*) reads this to verify specific ruin branches
+    // cover all variants when no catch-all is present.
+    std::vector<std::string> variants;
+    variants.reserve(node->variants.size());
+    for (const auto& v : node->variants) {
+        variants.push_back(v.lexeme);
+    }
+    rankVariants[node->name.lexeme] = std::move(variants);
 }
 
 // sigil Disk { stance Idle; stance Reading; soul16 sector_count; }
@@ -99,10 +132,22 @@ void SemanticAnalyzer::visit(SigilDecl* node) {
         return;
     }
 
-    // Pass 2: Validate field types and check for FPU usage in struct fields.
+    // Pass 2: Validate field types, check FPU usage, and populate TypeInfo::fields.
+    //
+    // FATAL FIX 3: Populate the field map on the sigil's TypeInfo so that
+    // member access expressions (ctrl->sector_count) resolve to the correct
+    // field type (soul16) instead of the container type (Disk).
+    //
+    // We write into the TypeInfo that was registered in Pass 1.
+    // Since typeRegistry holds shared_ptr<TypeInfo>, we can mutate it here.
+    auto& sigilTypeInfo = typeRegistry.at(node->name.lexeme);
+
     for (auto& field : node->fields) {
-        warnIfFlow(field.type); // PLAN A: check each field for float type
-        resolveType(field.type);
+        warnIfFlow(field.type);
+        auto fieldType = resolveType(field.type);
+        // Store the field's resolved type in the sigil's TypeInfo field map.
+        // This enables BinaryExpr ARROW/DOT to return the actual field type.
+        sigilTypeInfo->fields[field.name.lexeme] = fieldType;
     }
 
     // Pass 2: Analyze bound spell bodies.
@@ -448,6 +493,56 @@ void SemanticAnalyzer::visit(DestinedStmt* node) {
     // Visit the cleanup body. Note: NOT entering a new scope here.
     // The destined body shares the spell's scope — it needs to see all the
     // spell's variables (especially 'ctrl' for stance checks).
+    //
+    // FATAL FIX 1: Reject yield inside destined.
+    //
+    // WHY THIS IS FATAL:
+    //   destined blocks are emitted as goto LABELS at the END of the C function.
+    //   Every `yield` in a destined spell emits: __ret = val; goto __destined_N;
+    //   If `yield` appears inside the cleanup body itself, CodeGen emits:
+    //
+    //     __destined_N:;
+    //         __ret = val;
+    //         goto __destined_N;   ← jumps to itself = infinite loop
+    //
+    //   This is guaranteed undefined behavior. The CPU hangs. No GCC warning.
+    //
+    // We scan ALL statements recursively — a yield inside an if inside destined
+    // is equally catastrophic. We use a depth-first walk of the cleanup body.
+    //
+    // This helper lambda walks the block recursively and errors on any YieldStmt.
+    std::function<void(BlockStmt*)> checkNoYield = [&](BlockStmt* block) {
+        for (auto& stmt : block->statements) {
+            if (dynamic_cast<YieldStmt*>(stmt.get())) {
+                error(stmt->token,
+                      "'yield' inside a 'destined' cleanup block is illegal. "
+                      "The destined block executes AFTER yield — it runs during "
+                      "cleanup, not as a return path. Placing yield here creates "
+                      "an infinite goto loop in the generated C. "
+                      "Use 'destined' only for cleanup side effects (e.g., stance "
+                      "resets, port writes). To return early, yield before the "
+                      "destined block is reached.");
+            }
+            // Recurse into nested control flow so we catch:
+            //   destined { if (cond) { yield 0; } }
+            if (auto* ifStmt = dynamic_cast<IfStmt*>(stmt.get())) {
+                checkNoYield(ifStmt->thenBranch.get());
+                for (auto& elif : ifStmt->elifBranches) {
+                    checkNoYield(elif.body.get());
+                }
+                if (ifStmt->elseBranch) checkNoYield(ifStmt->elseBranch.get());
+            }
+            if (auto* whirl = dynamic_cast<WhirlStmt*>(stmt.get())) {
+                checkNoYield(whirl->body.get());
+            }
+            if (auto* fore = dynamic_cast<ForeStmt*>(stmt.get())) {
+                checkNoYield(fore->body.get());
+            }
+        }
+    };
+    checkNoYield(node->body.get());
+
+    // Body is safe — now walk it for normal type/ownership checks.
     for (auto& stmt : node->body->statements) {
         stmt->accept(*this);
     }
@@ -586,13 +681,72 @@ void SemanticAnalyzer::visit(DivineStmt* node) {
     if (!hasSuccess) {
         error(node->token, "Divine block is missing a success branch.");
     }
+
+    // FATAL FIX 2: Exhaustiveness enforcement.
+    //
+    // If a catch-all is present, coverage is unconditionally complete — done.
+    //
+    // If NO catch-all: every specific ruin branch names one variant of the rank.
+    // We must verify that the set of named variants equals the full variant list.
+    // Any missing variant is a hard error — at runtime, that ruin would fall
+    // through all branches silently, corrupting program state.
+    //
+    // MATH:
+    //   Let V = set of all variants in the matched rank (from rankVariants).
+    //   Let B = set of variants named in specific ruin branches.
+    //   Exhaustive iff B == V.
+    //   Missing variants = V \ B.  Report each missing variant by name.
     if (!hasCatchAll) {
-        // V1: Warn that variant coverage is not fully verified without a catch-all.
-        // V1.5: Check that every variant of the ruin rank has a specific branch.
-        std::cerr << "[Semantic Warning Line " << node->token.line << "] "
-                  << "Divine block has no catch-all ruin branch. "
-                  << "Full variant coverage is not verified in V1. "
-                  << "Consider adding '(ctrl, ruin err) => { }' for safety.\n";
+        // Collect the rank name from specific ruin branches.
+        // All specific ruin branches in one divine must match the same rank
+        // (the SA earlier validates this via typeRegistry rank lookup).
+        std::string matchedRankName;
+        std::set<std::string> coveredVariants;
+
+        for (const auto& branch : node->branches) {
+            if (branch.isRuin && branch.isSpecificRuin) {
+                matchedRankName = branch.rankName.lexeme;
+                coveredVariants.insert(branch.variantName.lexeme);
+            }
+        }
+
+        if (!matchedRankName.empty() && rankVariants.count(matchedRankName)) {
+            // We have a known rank — verify full coverage.
+            const auto& allVariants = rankVariants.at(matchedRankName);
+            std::vector<std::string> missing;
+
+            for (const auto& v : allVariants) {
+                if (!coveredVariants.count(v)) {
+                    missing.push_back(v);
+                }
+            }
+
+            if (!missing.empty()) {
+                // Build the error message listing every uncovered variant.
+                std::string missingList;
+                for (size_t i = 0; i < missing.size(); ++i) {
+                    missingList += "'" + matchedRankName + "::" + missing[i] + "'";
+                    if (i < missing.size() - 1) missingList += ", ";
+                }
+                error(node->token,
+                      "Non-exhaustive divine block. The rank '" + matchedRankName +
+                      "' has variants not covered by any branch: " + missingList + ". "
+                      "Either add specific branches for each missing variant, "
+                      "or add a catch-all branch '(ctrl, ruin err) => { }' "
+                      "to handle all remaining variants.");
+            }
+        } else if (matchedRankName.empty() && !hasCatchAll) {
+            // There are ruin branches but none are specific, and no catch-all.
+            // This means there are ruin branches with no coverage at all.
+            // The hasSuccess check above will have caught the no-success case.
+            // This path catches: divine with only a success branch and no ruin coverage.
+            // Emit a warning — incomplete ruin handling is risky but not always fatal
+            // if the spell cannot actually return a ruin at this call site.
+            std::cerr << "[Semantic Warning Line " << node->token.line << "] "
+                      << "Divine block has no ruin branches. "
+                      << "If the called spell can return a ruin, it will be silently dropped. "
+                      << "Add ruin branches or a catch-all '(ctrl, ruin err) => { }'.\n";
+        }
     }
 
     // 5. POST-BLOCK OWNERSHIP REBINDING (the <~ semantics).
@@ -853,13 +1007,46 @@ void SemanticAnalyzer::visit(BinaryExpr* node) {
 
     switch (node->op.type) {
         case TokenType::ARROW:
-        case TokenType::DOT:
-            // Member access: ctrl->stance, node.sector_count
-            // V1: Return left side's type. V1.5: look up the field type.
-            // The critical check: ->stance is read-only (no write allowed).
-            // That enforcement is in visit(AssignStmt*) which checks targets.
-            currentExprType = leftType;
+        case TokenType::DOT: {
+            // Member access: ctrl->sector_count, pkt.length
+            //
+            // FATAL FIX 3: Return the FIELD's type, not the container's type.
+            //
+            // Before this fix, ctrl->sector_count returned TypeInfo{"Disk"},
+            // which is wrong. After this fix it returns TypeInfo{"soul16"}.
+            // This enables correct type checking on assignments, spell arguments,
+            // and arithmetic expressions involving member access.
+            //
+            // SPECIAL CASE: ->stance / .stance
+            //   The ->stance accessor is a reserved read of the __stance field.
+            //   Its type is always soul16 (the discriminant type).
+            //
+            // FALLBACK: If the field is not found in the TypeInfo field map
+            //   (e.g., the sigil had no Pass 2 processing, or this is a hardware
+            //   type with no fields), fall back to leftType. This maintains
+            //   V1 behavior for unknown fields rather than crashing.
+            auto* rightIdent = dynamic_cast<IdentifierExpr*>(node->right.get());
+
+            if (rightIdent && rightIdent->token.lexeme == "stance") {
+                // ->stance / .stance: always soul16 (the __stance discriminant)
+                currentExprType = typeRegistry.count("soul16")
+                    ? typeRegistry["soul16"]
+                    : leftType;
+            } else if (rightIdent && leftType &&
+                       leftType->kind == TypeKind::SIGIL &&
+                       leftType->fields.count(rightIdent->token.lexeme)) {
+                // Known field on a known sigil — return the field's type.
+                currentExprType = leftType->fields.at(rightIdent->token.lexeme);
+            } else {
+                // Unknown field or non-sigil type — fall back to leftType.
+                // This covers hardware types, union access patterns, and any
+                // field that was not registered (e.g., missing in Pass 2).
+                // V1.5: Turn this fallback into a hard error once all sigil
+                // fields are guaranteed to be in the TypeInfo field map.
+                currentExprType = leftType;
+            }
             break;
+        }
 
         case TokenType::WEAVE:
             // ~> pipeline: left output feeds into right as first arg.

@@ -1,4 +1,5 @@
 #pragma once
+#include <unordered_map>
 #include <string>
 #include <vector>
 #include <memory>
@@ -94,6 +95,21 @@ struct TypeInfo {
     // isPortline: false = leyline (MMIO volatile pointer)
     //             true  = portline (PIO inline assembly)
     bool isPortline = false;
+
+    // --- For SIGIL types: field name -> field TypeInfo ---
+    // Populated during Pass 1 in SemanticAnalyzer::visit(SigilDecl*).
+    // Used by visit(BinaryExpr*) ARROW/DOT to return the correct field type
+    // instead of the containing sigil type (Fatal Fix 3).
+    //
+    // Example: sigil Disk { soul16 sector_count; rune flags; }
+    //   fields["sector_count"] -> TypeInfo{PRIMITIVE, "soul16"}
+    //   fields["flags"]        -> TypeInfo{PRIMITIVE, "rune"}
+    //
+    // The __stance pseudo-field is implicitly soul16 — handled separately in
+    // visit(BinaryExpr*) by checking if the field name is "stance".
+    //
+    // Empty for non-SIGIL types.
+    std::unordered_map<std::string, std::shared_ptr<TypeInfo>> fields;
 
     // Type equality. Two types are equal if they have the same kind and name.
     // For OMEN types, equality also requires matching success and ruin sub-types.

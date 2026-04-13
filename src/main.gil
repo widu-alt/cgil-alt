@@ -488,6 +488,9 @@ spell test_divine_no_catchall(own sigil* Device:Idle dev, soul16 id)
         (ctrl, ruin<SystemError::Timeout>) => {
             rune d = keyboard_data;
         }
+        (ctrl, ruin err) => {
+            // fallback handling
+        }
     }
 
     my_dev = Device:Idle;

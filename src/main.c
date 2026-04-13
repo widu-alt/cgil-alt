@@ -533,6 +533,10 @@ void test_divine_no_catchall(Device* dev, uint16_t id) {
         __auto_type ctrl = __result.__elem0; /* local alias */
         uint8_t d = ({ uint8_t __tmp; asm volatile("inb %1, %0" : "=a"(__tmp) : "d"((uint16_t)0x60)); __tmp; });
     }
+    else { /* catch-all ruin */
+        __auto_type ctrl = __result.__elem0; /* local alias */
+        uint16_t err = __result.__elem1.__ruin;
+    }
     
     } // --- end divine block ---
     my_dev.__stance = Device_Idle;

@@ -143,6 +143,20 @@ private:
     // Value: raw pointer to the SpellDecl AST node (owned by the AST, always valid)
     std::unordered_map<std::string, SpellDecl*> spellRegistry;
 
+    // All declared rank variant lists by rank name.
+    // Populated in Pass 1 alongside typeRegistry, so Pass 2 can enumerate variants.
+    //
+    // WHY THIS IS NEEDED:
+    //   TypeInfo only stores the rank's name and kind — not its variant list.
+    //   To verify exhaustiveness in divine blocks, we need to know every variant
+    //   of the matched rank so we can check that specific branches cover all of them.
+    //
+    // Example after parsing `rank DiskError { Timeout, HardwareFault, InvalidSector }`:
+    //   rankVariants["DiskError"] = ["Timeout", "HardwareFault", "InvalidSector"]
+    //
+    // Used exclusively in visit(DivineStmt*) exhaustiveness checking.
+    std::unordered_map<std::string, std::vector<std::string>> rankVariants;
+
     // The type of the most recently evaluated expression.
     // Set by every expression visitor. Read by the caller immediately after.
     // This "return value via side effect" approach is standard for ASTVisitor.
