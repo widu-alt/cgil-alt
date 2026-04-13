@@ -85,6 +85,7 @@ struct CallExpr;
 struct AddressOfExpr;
 struct IndexExpr;
 struct StructInitExpr;
+struct AssignExpr;
 
 // =============================================================================
 // THE VISITOR INTERFACE
@@ -132,6 +133,7 @@ public:
     virtual void visit(AddressOfExpr*  node) = 0;
     virtual void visit(IndexExpr*      node) = 0;
     virtual void visit(StructInitExpr* node) = 0;
+    virtual void visit(AssignExpr*     node) = 0;
 };
 
 // =============================================================================
@@ -473,7 +475,6 @@ struct ForeStmt : public Stmt {
     std::unique_ptr<Expr>      initValue;   // e.g., 0
     std::unique_ptr<Expr>      condition;   // e.g., i < 10
     std::unique_ptr<Expr>      increment;   // Left side (e.g., i)
-    std::unique_ptr<Expr>      incValue;    // NEW: Right side (e.g., i + 1)
     std::unique_ptr<BlockStmt> body;
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
@@ -722,5 +723,18 @@ struct StructInitExpr : public Expr {
 
     std::vector<StructFieldInit> fields; // Field initializers in source order
 
+    void accept(ASTVisitor& visitor) override { visitor.visit(this); }
+};
+
+// Formal Assignment Expression (e.g., i = i + 1 used inside fore loops)
+struct AssignExpr : public Expr {
+    std::unique_ptr<Expr> target;
+    Token                 op;      // The '=' token
+    std::unique_ptr<Expr> value;
+
+    AssignExpr(std::unique_ptr<Expr> t, Token o, std::unique_ptr<Expr> v)
+        : target(std::move(t)), op(o), value(std::move(v)) {
+        token = o;
+    }
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };

@@ -901,10 +901,6 @@ void CodeGenVisitor::visit(ForeStmt* node) {
     emit("; ");
     if (node->increment) {
         node->increment->accept(*this);
-        if (node->incValue) {
-            emit(" = ");
-            node->incValue->accept(*this);
-        }
     }
     emit(") {\n");
     indentLevel++;
@@ -912,7 +908,6 @@ void CodeGenVisitor::visit(ForeStmt* node) {
     indentLevel--;
     emitLine("}");
 }
-
 // whirl (condition) { } -> while (condition) { }
 void CodeGenVisitor::visit(WhirlStmt* node) {
     if (currentPhase != Phase::IMPLEMENTATIONS) return;
@@ -1417,4 +1412,12 @@ void CodeGenVisitor::visit(StructInitExpr* node) {
     }
 
     emit(" }");
+}
+
+void CodeGenVisitor::visit(AssignExpr* node) {
+    if (currentPhase != Phase::IMPLEMENTATIONS) return;
+
+    node->target->accept(*this);
+    emit(" = ");
+    node->value->accept(*this);
 }

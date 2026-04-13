@@ -374,8 +374,23 @@ void SemanticAnalyzer::visit(ForeStmt* node) {
     loopDepth--;
 
     // Check the increment expression (e.g., i = i + 1).
-    if (node->incValue) {
-        evaluate(node->incValue.get());
+    // STRICT ENFORCEMENT: The LHS of the increment MUST be the loop variable.
+    if (node->increment) {
+        auto* assignExpr = dynamic_cast<AssignExpr*>(node->increment.get());
+        IdentifierExpr* incIdent = nullptr;
+
+        if (assignExpr) {
+            incIdent = dynamic_cast<IdentifierExpr*>(assignExpr->target.get());
+        } else {
+            incIdent = dynamic_cast<IdentifierExpr*>(node->increment.get());
+        }
+
+        if (!incIdent || incIdent->token.lexeme != node->initVar.lexeme) {
+            error(node->token, 
+                  "Loop increment must modify the loop variable '" + node->initVar.lexeme + "'. "
+                  "Invalid loop header.");
+        }
+        evaluate(node->increment.get());
     }
 
     symbols.exitScope(); // Loop variable goes out of scope
@@ -660,6 +675,14 @@ void SemanticAnalyzer::visit(VarDeclStmt* node) {
 
     auto varType = resolveType(node->typeToken);
 
+    // KERNEL FLOW WARNING: Warn developers about FPU registers in bare-metal context
+    if (node->typeToken.lexeme == "flow") {
+        std::cerr << "[Semantic Warning Line " << node->token.line << "] "
+                  << "Floating-point ('flow') variable '" << node->name.lexeme 
+                  << "' declared in kernel context. "
+                  << "Hardware FPU emulation may cause a kernel panic if not explicitly managed.\n";
+    }
+
     std::string initialStance = "";
 
     if (node->initializer) {
@@ -797,6 +820,15 @@ void SemanticAnalyzer::visit(PostfixExpr* node) {
         error(node->op,
               "'?' can only be applied to an Omen type (T | ruin<R>). "
               "The expression before '?' does not return an Omen.");
+    }
+
+    // WARDEN CONSTRAINT: warden spells cannot propagate ruin.
+    // If ? is used inside a warden spell, it would propagate a ruin to hardware
+    // context, which is forbidden.
+    if (currentSpell && currentSpell->isWarden) {
+        error(node->op,
+              "'warden spell' cannot use the '?' unpack operator. "
+              "ISRs cannot propagate errors up to the hardware; they must handle ruins internally.");
     }
 
     // RESOLVEDOMENTYPE PATCH:
@@ -1205,4 +1237,14 @@ void SemanticAnalyzer::visit(StructInitExpr* node) {
 
     // The expression type is the sigil type itself.
     currentExprType = sigilType;
+}
+
+void SemanticAnalyzer::visit(AssignExpr* node) {
+    if (isPassOne) return;
+
+    auto targetType = evaluate(node->target.get());
+    auto valueType = evaluate(node->value.get());
+
+    // V1.5 TODO: Strict type compatibility and lvalue validation
+    currentExprType = targetType;
 }

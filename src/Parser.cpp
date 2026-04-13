@@ -342,6 +342,19 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         Token typeToken = consume(TokenType::IDENT, "Expected type name after sigil/legion.");
         return parseVarDeclStmt(typeToken);
     }
+
+    // Intercept Sigil/Legion local declarations (e.g., sigil Device my_dev = ...)
+    if (match({TokenType::SIGIL, TokenType::LEGION})) {
+        Token typeToken = consume(TokenType::IDENT, "Expected type name after sigil/legion.");
+        return parseVarDeclStmt(typeToken);
+    }
+
+    // NEW: Intercept bare sigil declarations: Device dev = ...;
+    // Uses 2-token lookahead (IDENT IDENT) to safely distinguish from normal expressions.
+    if (check(TokenType::IDENT) && peekNext().type == TokenType::IDENT) {
+        Token typeToken = advance(); // Consume the type IDENT
+        return parseVarDeclStmt(typeToken);
+    }
     
     if (match({TokenType::IF}))       return parseIfStmt();
     if (match({TokenType::FORE}))     return parseForeStmt();
@@ -465,14 +478,14 @@ std::unique_ptr<ForeStmt> Parser::parseForeStmt() {
     node->condition = parseExpression();
     consume(TokenType::SEMICOLON, "Expected ';' after loop condition.");
 
-    // Increment: i++ — stored as an expression.
-    // i++ is lexed as IDENT PLUS PLUS. parsePrecedence handles the ++ as
-    // two PLUS tokens which won't form a valid expression by themselves.
-    // TODO: For V1, the increment expression is best written as i = i + 1.
-    // Full postfix ++ support would require adding a PostfixIncr expression node.
-    node->increment = parseExpression();
+    // Increment: parse left side. If '=' follows, build an AssignExpr.
+    auto incTarget = parseExpression();
     if (match({TokenType::ASSIGN})) {
-        node->incValue = parseExpression();
+        Token eqToken = previous();
+        auto incValue = parseExpression();
+        node->increment = std::make_unique<AssignExpr>(std::move(incTarget), eqToken, std::move(incValue));
+    } else {
+        node->increment = std::move(incTarget);
     }
 
     consume(TokenType::RPAREN, "Expected ')' after fore header.");
