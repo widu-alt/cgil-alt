@@ -859,8 +859,10 @@ void CodeGenVisitor::visit(YieldStmt* node) {
     emit(";\n");
 
     if (inDestinedSpell) {
-        int lastDeclared = globalDestinedCounter + (int)currentDestinedBlocks.size() - 1;
-        emitLine("goto __destined_" + std::to_string(lastDeclared) + ";");
+        // PLAN D BUGFIX: Use the stable per-spell base for value-yielding paths.
+        // This matches the empty-yield path at the top of the function.
+        int lifoEntryLabel = currentSpellDestinedBase + (int)currentDestinedBlocks.size() - 1;
+        emitLine("goto __destined_" + std::to_string(lifoEntryLabel) + ";");
     }
 }
 

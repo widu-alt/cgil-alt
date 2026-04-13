@@ -401,10 +401,10 @@ Tuple_DevicePtr_soul16_Omen_SystemError test_destined_unconditional(Device* dev,
     dev->__stance = Device_Active;
     if ((id == 0)) {
         __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError)(Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_InvalidSector } };
-        goto __destined_2;
+        goto __destined_1;
     }
     __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 0, .__value = id } };
-    goto __destined_2;
+    goto __destined_1;
     
     // --- Destined RAII Cleanup Chain (LIFO order) ---
     __destined_1:;
@@ -419,10 +419,10 @@ Tuple_DevicePtr_soul16_Omen_SystemError test_destined_conditional(Device* dev, u
     if ((id == 0)) {
         dev->__stance = Device_Fault;
         __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError)(Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_HardwareFault } };
-        goto __destined_3;
+        goto __destined_2;
     }
     __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 0, .__value = id } };
-    goto __destined_3;
+    goto __destined_2;
     
     // --- Destined RAII Cleanup Chain (LIFO order) ---
     __destined_2:;
@@ -438,15 +438,15 @@ Tuple_DevicePtr_soul16_Omen_SystemError test_destined_multiple(Device* dev, uint
     dev->__stance = Device_Active;
     if ((id == 0)) {
         __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError)(Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_Timeout } };
-        goto __destined_6;
+        goto __destined_4;
     }
     if ((id == 1)) {
         dev->__stance = Device_Fault;
         __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError)(Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_HardwareFault } };
-        goto __destined_6;
+        goto __destined_4;
     }
     __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ dev, (Omen_soul16_SystemError){ .__is_ruin = 0, .__value = id } };
-    goto __destined_6;
+    goto __destined_4;
     
     // --- Destined RAII Cleanup Chain (LIFO order) ---
     __destined_4:;
@@ -756,14 +756,14 @@ Tuple_DevicePtr_soul16_Omen_SystemError test_multi_device_op(Device* primary, ui
     if ((cmd == 0)) {
         primary->__stance = Device_Fault;
         __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ primary, (Omen_soul16_SystemError)(Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_HardwareFault } };
-        goto __destined_8;
+        goto __destined_6;
     }
     if ((cmd == 1)) {
         __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ primary, (Omen_soul16_SystemError)(Omen_soul16_SystemError){ .__is_ruin = 1, .__ruin = SystemError_Timeout } };
-        goto __destined_8;
+        goto __destined_6;
     }
     __ret = (Tuple_DevicePtr_soul16_Omen_SystemError){ primary, (Omen_soul16_SystemError){ .__is_ruin = 0, .__value = cmd } };
-    goto __destined_8;
+    goto __destined_6;
     
     // --- Destined RAII Cleanup Chain (LIFO order) ---
     __destined_6:;
