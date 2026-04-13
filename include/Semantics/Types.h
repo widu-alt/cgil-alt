@@ -111,6 +111,14 @@ struct TypeInfo {
     // Empty for non-SIGIL types.
     std::unordered_map<std::string, std::shared_ptr<TypeInfo>> fields;
 
+    // ADDED CONSTRUCTOR: Silences GCC's -Wmissing-field-initializers warnings
+    TypeInfo(TypeKind k, std::string n, 
+             std::shared_ptr<TypeInfo> s = nullptr, 
+             std::shared_ptr<TypeInfo> r = nullptr)
+        : kind(k), name(n), successType(s), ruinType(r) {}
+
+    // Type equality. Two types are equal if they have the same kind and name.
+
     // Type equality. Two types are equal if they have the same kind and name.
     // For OMEN types, equality also requires matching success and ruin sub-types.
     //

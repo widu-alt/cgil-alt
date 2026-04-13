@@ -1,4 +1,4 @@
-#include "Parser.h"
+#include "../../include/Parser/Parser.h"
 #include <iostream>
 
 // =============================================================================
@@ -195,7 +195,7 @@ std::unique_ptr<LegionDecl> Parser::parseLegionDecl() {
 // (Parser.h), not in this definition. In C++, default arguments must be
 // in the declaration, not the definition. Having it here previously caused
 // a signature mismatch that prevented compilation.
-std::unique_ptr<SpellDecl> Parser::parseSpellDecl(bool isTopLevel) {
+std::unique_ptr<SpellDecl> Parser::parseSpellDecl(bool /*isTopLevel*/) {
     auto node = std::make_unique<SpellDecl>();
     node->token = previous();
 
@@ -233,8 +233,14 @@ std::unique_ptr<SpellDecl> Parser::parseSpellDecl(bool isTopLevel) {
                 }
             } else {
                 // Primitive type: addr target, scroll msg, mark16 x, etc.
-                p.type      = consumeType("Expected a valid parameter type.");
-                p.isPointer = false;
+                p.type = consumeType("Expected a valid parameter type.");
+                
+                // THE FIX: Allow primitive pointers (e.g., mark16* target_ptr)
+                if (match({TokenType::STAR})) {
+                    p.isPointer = true;
+                } else {
+                    p.isPointer = false;
+                }
             }
 
             p.name = consume(TokenType::IDENT, "Expected parameter name.");
@@ -249,12 +255,16 @@ std::unique_ptr<SpellDecl> Parser::parseSpellDecl(bool isTopLevel) {
 
     if (match({TokenType::LPAREN})) {
         // Tuple return: (sigil* Disk, scroll | ruin<DiskError>)
-        // FIXED (Landmine 2): Each element is stored as ReturnTypeInfo carrying
-        // both the type token AND the isPointer flag. The Parser no longer discards '*'.
+        //
+        // FIX 2: Tuple-Omen Collision.
+        // The last element of a tuple may be followed by `| ruin<Rank>`.
+        // Previously the loop hit `|` and crashed expecting `)`.
+        // Now: after parsing each element type, check for `|`. If found,
+        // consume the omen suffix, set hasOmen, and break — the omen
+        // terminates the tuple element list.
         do {
             ReturnTypeInfo ri;
             if (match({TokenType::SIGIL})) {
-                // sigil* TypeName — consume the * and record isPointer=true
                 consume(TokenType::STAR, "Expected '*' after 'sigil' in return type.");
                 ri.typeToken  = consumeType("Expected sigil type name after 'sigil*'.");
                 ri.isPointer  = true;
@@ -263,6 +273,18 @@ std::unique_ptr<SpellDecl> Parser::parseSpellDecl(bool isTopLevel) {
                 ri.isPointer  = false;
             }
             node->returnTypes.push_back(ri);
+
+            // Check if this element is followed by | ruin<Rank> — the Omen suffix.
+            // If so, consume it here, set hasOmen, and stop parsing tuple elements.
+            if (check(TokenType::PIPE)) {
+                advance(); // consume '|'
+                consume(TokenType::RUIN, "Expected 'ruin' after '|' in return type.");
+                consume(TokenType::LT,   "Expected '<' after 'ruin'.");
+                node->omenErrorType = consume(TokenType::IDENT, "Expected rank name inside ruin<...>.");
+                consume(TokenType::GT,   "Expected '>' after ruin rank name.");
+                node->hasOmen = true;
+                break; // Omen terminates the tuple element list
+            }
         } while (match({TokenType::COMMA}));
         consume(TokenType::RPAREN, "Expected ')' after tuple return type.");
     } else {
@@ -331,7 +353,8 @@ std::unique_ptr<HardwareDecl> Parser::parseHardwareDecl() {
 // Routes to the correct statement parser. Falls through to parseExprOrAssignStmt
 // for everything that does not start with a recognized keyword.
 std::unique_ptr<Stmt> Parser::parseStatement() {
-    // Intercept Primitive Types
+    // Intercept Primitive Types — with optional pointer declarator.
+    // Handles: mark16 x = 5;   AND   mark16* px = &x;
     if (check(TokenType::MARK16) || check(TokenType::MARK32) ||
         check(TokenType::SOUL16) || check(TokenType::SOUL32) ||
         check(TokenType::ADDR)   || check(TokenType::FLOW)   ||
@@ -339,20 +362,24 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         check(TokenType::SCROLL) || check(TokenType::ABYSS)  ||
         check(TokenType::DECK)) {
         Token typeToken = advance();
-        return parseVarDeclStmt(typeToken);
+        bool isPtr = false;
+        if (check(TokenType::STAR)) {
+            advance(); // consume '*'
+            isPtr = true;
+        }
+        return parseVarDeclStmt(typeToken, isPtr);
     }
 
-    // Intercept Sigil/Legion local declarations (e.g., sigil Device my_dev = ...)
+    // Intercept sigil/legion local declarations with explicit keyword.
+    // Handles: sigil Device dev = ...;   AND   sigil* Device ptr = ...;
     if (match({TokenType::SIGIL, TokenType::LEGION})) {
+        bool isPtr = false;
+        if (check(TokenType::STAR)) {
+            advance(); // consume '*' — this is sigil* Device ptr = ...
+            isPtr = true;
+        }
         Token typeToken = consume(TokenType::IDENT, "Expected type name after sigil/legion.");
-        return parseVarDeclStmt(typeToken);
-    }
-
-    // Intercept sigil/legion local declarations with explicit keyword:
-    //   sigil Device my_dev = ...;     legion SectorCache cache = ...;
-    if (match({TokenType::SIGIL, TokenType::LEGION})) {
-        Token typeToken = consume(TokenType::IDENT, "Expected type name after sigil/legion.");
-        return parseVarDeclStmt(typeToken);
+        return parseVarDeclStmt(typeToken, isPtr);
     }
 
     // Intercept BARE sigil/legion declarations without the keyword:
@@ -699,7 +726,7 @@ std::unique_ptr<Stmt> Parser::parseExprOrAssignStmt() {
     return std::make_unique<ExprStmt>(std::move(expr));
 }
 
-std::unique_ptr<Stmt> Parser::parseVarDeclStmt(Token typeToken) {
+std::unique_ptr<Stmt> Parser::parseVarDeclStmt(Token typeToken, bool isPointer) {
     auto node = std::make_unique<VarDeclStmt>();
     node->token = typeToken;
 
@@ -713,6 +740,10 @@ std::unique_ptr<Stmt> Parser::parseVarDeclStmt(Token typeToken) {
         node->isArray = false;
         node->typeToken = typeToken;
     }
+
+    // Store the pointer flag passed from parseStatement().
+    // This covers: mark16* px = ...; and sigil* Device ptr = ...;
+    node->isPointer = isPointer;
 
     node->name = consume(TokenType::IDENT, "Expected variable name.");
 

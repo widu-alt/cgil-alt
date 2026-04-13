@@ -1,6 +1,6 @@
 #pragma once
-#include "AST.h"
-#include "SymbolTable.h"
+#include "../Parser/AST.h"
+#include "../Semantics/SymbolTable.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <iostream>

@@ -1,0 +1,62 @@
+// =============================================================================
+// CGIL ISOLATED TEST 01: Primitives & Arithmetic
+// =============================================================================
+
+pact <stdio.h>;
+
+conjure spell putchar(mark32 c) -> mark32;
+
+// --- Print Helpers ---
+spell print(scroll msg) -> abyss {
+    fore (mark16 i = 0; i < msg.len; i = i + 1) {
+        putchar(msg.ptr[i]);
+    }
+}
+
+spell print_ok(scroll label) -> abyss {
+    print(label);
+    print(" ... OK\n");
+}
+
+// --- The Test ---
+spell test_primitives() -> abyss {
+    // Basic signed math
+    mark16 a = 10;
+    mark16 b = 20;
+    mark16 sum = a + b;
+    mark16 diff = b - a;
+    mark16 prod = a * b;
+    mark16 quot = b / a;
+
+    // Unsigned and hex literals
+    soul16 u_val = 65000;
+    rune   hex_val = 0xFF;
+
+    // Booleans
+    oath t = kept;
+    oath f = forsaken;
+
+    // Validation
+    if (sum == 30) {
+        if (diff == 10) {
+            if (prod == 200) {
+                if (quot == 2) {
+                    if (t == kept) {
+                        if (f == forsaken) {
+                            if (hex_val == 255) {
+                                print_ok("TEST 01: Primitives and Arithmetic");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- Entry Point ---
+spell main() -> mark16 {
+    print("\nRunning Test 01...\n");
+    test_primitives();
+    yield 0;
+}

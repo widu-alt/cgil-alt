@@ -1,6 +1,6 @@
 #pragma once
-#include "AST.h"
-#include "Types.h"
+#include "../Parser/AST.h"
+#include "../Semantics/Types.h"
 #include <iostream>
 #include <string>
 #include <unordered_map>

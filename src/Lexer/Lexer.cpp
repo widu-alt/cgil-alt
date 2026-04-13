@@ -1,4 +1,4 @@
-#include "Lexer.h"
+#include "../../include/Lexer/Lexer.h"
 #include <cctype>
 
 const std::unordered_map<std::string, TokenType> Lexer::keywords = {

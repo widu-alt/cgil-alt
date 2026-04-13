@@ -1,4 +1,4 @@
-#include "CodeGen.h"
+#include "../../include/CodeGen/CodeGen.h"
 #include <sstream>
 
 // =============================================================================
@@ -516,6 +516,12 @@ void CodeGenVisitor::visit(SpellDecl* node) {
         }
     }
 
+    // HOST OS FIX: The entry point 'main' must always return standard 'int' in C.
+    // Cgil allows 'mark16' or 'mark32' for the user, but we force 'int' for GCC.
+    if (node->name.lexeme == "main") {
+        returnTypeStr = "int";
+    }
+
     // Build the full signature string.
     std::string signature;
 
@@ -745,9 +751,9 @@ void CodeGenVisitor::visit(AssignStmt* node) {
     if (targetIdent && isPortline(targetIdent->token.lexeme)) {
         // Capture the value expression as a string by temporarily redirecting output.
         // This lets us pass the value into the outb/outw asm template.
-        std::ostringstream valStream;
-        std::ostream* prevOut = &out;
-        // We can't easily redirect — instead build the value string via a helper.
+        // (V1: We emit the asm with the raw value expression inline instead of redirecting)
+        // std::ostringstream valStream;
+        // std::ostream* prevOut = &out;
         // For V1: emit the asm with the raw value expression inline.
         indent();
         std::string port = targetIdent->token.lexeme;
@@ -867,13 +873,13 @@ void CodeGenVisitor::visit(YieldStmt* node) {
 }
 
 // shatter; -> break;
-void CodeGenVisitor::visit(ShatterStmt* node) {
+void CodeGenVisitor::visit(ShatterStmt* /*node*/) {
     if (currentPhase != Phase::IMPLEMENTATIONS) return;
     emitLine("break;");
 }
 
 // surge; -> continue;
-void CodeGenVisitor::visit(SurgeStmt* node) {
+void CodeGenVisitor::visit(SurgeStmt* /*node*/) {
     if (currentPhase != Phase::IMPLEMENTATIONS) return;
     emitLine("continue;");
 }
@@ -1069,6 +1075,16 @@ void CodeGenVisitor::visit(VarDeclStmt* node) {
         indent();
         emit(cType + " " + node->name.lexeme +
              "[" + node->arraySizeToken.lexeme + "]");
+        if (node->initializer) {
+            emit(" = ");
+            node->initializer->accept(*this);
+        }
+        emit(";\n");
+    } else if (node->isPointer) {
+        // Pointer declaration: mark16* px = &x;   sigil* Device ptr = &dev;
+        // Emits: int16_t* px = &x;   Device* ptr = &dev;
+        indent();
+        emit(cType + "* " + node->name.lexeme);
         if (node->initializer) {
             emit(" = ");
             node->initializer->accept(*this);

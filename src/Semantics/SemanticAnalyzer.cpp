@@ -1,4 +1,4 @@
-#include "SemanticAnalyzer.h"
+#include "../../include/Semantics/SemanticAnalyzer.h"
 #include <functional> // For std::function (Fix 1)
 #include <set>        // For std::set (Fix 2)
 #include <typeinfo>   // For typeid (Supplementary Fix)
@@ -964,6 +964,15 @@ void SemanticAnalyzer::visit(VarDeclStmt* node) {
         if (auto* structInit = dynamic_cast<StructInitExpr*>(node->initializer.get())) {
             initialStance = structInit->stanceName.lexeme;
         }
+        // STRIKE 6 FIX: If initialized with a pointer to a variable (&dev), inherit its stance!
+        // Without this, local pointers to hardware drop the typestate lock.
+        else if (auto* addrOf = dynamic_cast<AddressOfExpr*>(node->initializer.get())) {
+            if (auto* targetIdent = dynamic_cast<IdentifierExpr*>(addrOf->operand.get())) {
+                if (Symbol* sym = symbols.lookup(targetIdent->token.lexeme)) {
+                    initialStance = sym->currentStance;
+                }
+            }
+        }
     }
 
     // Register it in the current scope with the correct initial stance
@@ -1134,6 +1143,18 @@ void SemanticAnalyzer::visit(PostfixExpr* node) {
         error(node->op,
               "'warden spell' cannot use the '?' unpack operator. "
               "ISRs cannot propagate errors up to the hardware; they must handle ruins internally.");
+    }
+
+    // OMEN PROPAGATION CONSTRAINT:
+    // The '?' operator returns a ruin to the caller. Therefore, the enclosing
+    // spell MUST have an Omen in its return type. You cannot propagate an error
+    // out of an 'abyss' spell or a pure primitive-returning spell.
+    if (currentSpell && !currentSpell->hasOmen) {
+        error(node->op,
+              "The '?' operator propagates ruins, but the enclosing spell '" +
+              currentSpell->name.lexeme + "' does not return an Omen. "
+              "You can only use '?' inside a spell that returns 'T | ruin<E>'. "
+              "To handle ruins inside an abyss spell, use 'divine'.");
     }
 
     // RESOLVEDOMENTYPE PATCH:

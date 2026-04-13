@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Lexer.h"
+#include "../Lexer/Lexer.h"
 #include <vector>
 #include <string>
 #include <memory>
@@ -267,7 +267,7 @@ struct ReturnTypeInfo {
 struct ProgramNode : public ASTNode {
     std::vector<std::unique_ptr<Decl>> declarations;
     // ProgramNode is visited directly by compiler passes, not via accept().
-    void accept(ASTVisitor& visitor) override { /* visited directly */ }
+    void accept(ASTVisitor& /*visitor*/) override { /* visited directly */ }
 };
 
 // grimoire <hardware_defs.h>;   — internal bare-metal OS header (Ring 0)
@@ -541,8 +541,9 @@ struct VarDeclStmt : public Stmt {
     // Is this an array declaration? e.g., deck[80] rune name;
     bool  isArray         = false;
     Token arraySizeToken;   // The size token: "80" in deck[80]
-    // When isArray = true, CodeGen emits: cType name[size];
-    // When isArray = false (default), CodeGen emits: cType name;
+    // Is this a pointer declaration? e.g., mark16* px = ...; sigil* Device ptr = ...;
+    // When isPointer = true, CodeGen emits: cType* name;
+    bool  isPointer       = false;
 
     VarDeclStmt() = default;
     VarDeclStmt(Token typeToken, Token name, std::unique_ptr<Expr> initializer)

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Lexer.h"
-#include "AST.h"
+#include "../Lexer/Lexer.h"
+#include "../Parser/AST.h"
 #include <vector>
 #include <memory>
 #include <stdexcept>
@@ -127,7 +127,7 @@ private:
 
     // Handles expression statements (f();) and assignment statements (x = y;).
     std::unique_ptr<Stmt>          parseExprOrAssignStmt();
-    std::unique_ptr<Stmt>          parseVarDeclStmt(Token typeToken);
+    std::unique_ptr<Stmt>          parseVarDeclStmt(Token typeToken, bool isPointer = false);
     
     // =========================================================================
     // EXPRESSION PARSERS (Pratt / Precedence Climbing)
