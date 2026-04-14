@@ -204,7 +204,7 @@ private:
     //   - visit(SigilDecl*)       — struct field types
     //   - visit(ForeStmt*)        — loop variable type
     //
-    // CONTEXT RULES (ratified with Gemini's null-safety amendment):
+    // CONTEXT RULES:
     //   Inside a warden spell (currentSpell != nullptr && currentSpell->isWarden):
     //     → Hard semantic ERROR. FPU in an ISR is a guaranteed kernel panic.
     //   Inside a normal spell or at global scope (currentSpell == nullptr):
@@ -230,12 +230,12 @@ private:
     //   BinaryExpr(DOT)    — value member access: pkt.length
     //   IndexExpr           — array subscript: buf[i]
     //   UnaryExpr(STAR)    — pointer dereference: *ptr
-    //                        (ratified addition from Gemini's amendment)
+    //
     //
     // INVALID LVALUES (false) — everything else, including:
     //   IdentifierExpr where !stanceName.empty() — Disk:Fault is a constant
     //   IdentifierExpr where !variantName.empty() — DiskError::Timeout is a constant
-    //                        (ratified addition from Gemini's amendment)
+    //
     //   LiteralExpr        — 5 = x is illegal
     //   CallExpr           — foo() = x is illegal
     //   PostfixExpr        — val? = x is illegal

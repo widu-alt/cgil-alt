@@ -37,12 +37,6 @@ struct Token {
     int column;
 };
 
-/* * PARSER CONTRACT NOTE:
- * The Lexer emits 'LT' for the '<' character. It is the Parser's responsibility 
- * to determine from context whether 'LT' represents a less-than operator 
- * (e.g., `if (a < b)`) or a pattern/generic boundary (e.g., `ruin<DiskError>`).
- */
-
 class Lexer {
 public:
     explicit Lexer(std::string source);

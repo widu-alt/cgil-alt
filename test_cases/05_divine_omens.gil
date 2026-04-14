@@ -1,0 +1,132 @@
+// =============================================================================
+// CGIL ISOLATED TEST 05: The Divine Pattern, ? Unpack, and Omens
+// =============================================================================
+
+pact <stdio.h>;
+conjure spell putchar(mark32 c) -> mark32;
+
+// --- Helpers ---
+spell print(scroll msg) -> abyss {
+    fore (mark16 i = 0; i < msg.len; i = i + 1) {
+        putchar(msg.ptr[i]);
+    }
+}
+
+spell print_ok(scroll label) -> abyss {
+    print(label);
+    print(" ... OK\n");
+}
+
+// --- Types ---
+rank DiskError {
+    Timeout,
+    HardwareFault
+}
+
+sigil Disk {
+    stance Idle;
+    stance Busy;
+    mark16 id;
+}
+
+// --- Spells ---
+
+// 1. A base spell that yields a standard Omen
+spell check_sector(mark16 sector) -> scroll | ruin<DiskError> {
+    if (sector == 99) {
+        yield ruin(DiskError::HardwareFault); // Rank variants use ::
+    }
+    yield "DATA"; 
+}
+
+// 2. Tests the '?' Tuple Repackaging fix
+spell read_disk(own sigil* Disk:Idle d, mark16 target_sector) -> (sigil* Disk, scroll | ruin<DiskError>) {
+    d = Disk:Busy;
+    
+    // If check_sector fails, the '?' operator must intercept the ruin, 
+    // repackage it into the (Disk, Omen) tuple layout, and return early.
+    scroll data = check_sector(target_sector)?; 
+    
+    d = Disk:Idle;
+    yield (d, data);
+}
+
+// 3. Tests the "Ghost Variable" fix (abyss payloadless omen)
+spell reset_disk(own sigil* Disk:Idle d) -> (sigil* Disk, abyss | ruin<DiskError>) {
+    yield (d, ruin(DiskError::Timeout));
+}
+
+// --- The Test ---
+spell test_divine() -> abyss {
+    sigil Disk my_disk = Disk:Idle { id: 1 };
+    
+    scroll result_data = "";
+    mark16 error_code = 0;
+    mark16 timeout_caught = 0;
+
+    // TEST A: The Happy Path (Success Match)
+    my_disk <~ divine read_disk(own &my_disk, 10) {
+        (ctrl, scroll data) => {
+            result_data = data;
+        }
+        (ctrl, ruin err) => {
+            error_code = 999; 
+        }
+    }
+
+    my_disk = Disk:Idle;
+
+    // TEST B: The `?` Early Return & Specific Ruin Match
+    my_disk <~ divine read_disk(own &my_disk, 99) {
+        (ctrl, scroll data) => {
+            error_code = 888; 
+        }
+        (ctrl, ruin<DiskError::HardwareFault>) => { // Specific match uses ::
+            error_code = 1; // SUCCESS: We caught the hardware fault!
+        }
+        (ctrl, ruin err) => {
+            error_code = 777; 
+        }
+    }
+
+    my_disk = Disk:Idle;
+
+    // TEST C: Payloadless Success Match (abyss)
+    my_disk <~ divine reset_disk(own &my_disk) {
+        (ctrl) => {  // NO PAYLOAD VARIABLE ALLOWED HERE (Ghost variable fix)
+            timeout_caught = 999;
+        }
+        (ctrl, ruin<DiskError::Timeout>) => {
+            timeout_caught = 1; // SUCCESS: Caught the timeout!
+        }
+        (ctrl, ruin err) => {
+            timeout_caught = 888;
+        }
+    }
+
+    // Validation
+    if (result_data.len != 4) {
+        print("-> FAIL: Test A (result_data.len is not 4)\n");
+    }
+    if (error_code != 1) {
+        print("-> FAIL: Test B (? unpack failed to set error_code to 1)\n");
+    }
+    if (timeout_caught != 1) {
+        print("-> FAIL: Test C (abyss omen failed to set timeout_caught to 1)\n");
+    }
+
+    if (result_data.len == 4) {
+        if (error_code == 1) {
+            if (timeout_caught == 1) {
+                print_ok("TEST 05: Divine Pattern, ? Unpack, and Omens");
+            }
+        }
+    }
+}
+
+// --- Entry Point ---
+spell main() -> mark16 {
+    print("\nRunning Test 05...\n");
+    test_divine();
+    yield 0;
+}

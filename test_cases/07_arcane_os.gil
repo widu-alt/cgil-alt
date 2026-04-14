@@ -1,0 +1,136 @@
+// =============================================================================
+// CGIL OS: ARCANE BOOTSTRAP SEQUENCE
+// =============================================================================
+
+pact <stdio.h>;
+
+// --- External Spells (Conjurations) ---
+conjure spell putchar(mark32 c) -> mark32;
+
+// --- Helper Spells ---
+spell print(scroll msg) -> abyss {
+    fore (mark16 i = 0; i < msg.len; i = i + 1) {
+        putchar(msg.ptr[i]);
+    }
+}
+
+// A simple cycle-burner to simulate hardware spin-up delays
+spell burn_cycles() -> abyss {
+    mark32 acc = 0;
+    whirl (acc < 90000) {
+        acc = acc + 1;
+    }
+}
+
+// --- The Hardware & Typestates ---
+rank ResonanceError {
+    Overload,
+    ShatteredMatrix
+}
+
+sigil Core {
+    stance Dormant;
+    stance Resonating;
+    stance Ignited;
+
+    mark16 frequency;
+    rune   stability;
+}
+
+// Bare-metal hardware bindings
+leyline vga_buffer: mark16 @ 0xB8000;
+portline mana_valve: rune @ 0x1F0;
+
+// --- The Core Logic Spells ---
+
+// Takes a borrowed Dormant core, mutates it, writes to a port, and yields an Omen.
+spell attune_core(sigil* Core:Dormant c) -> scroll | ruin<ResonanceError> {
+    c = Core:Resonating; 
+
+    // Simulating Port I/O hardware interaction
+    // mana_valve = 0xFF; 
+    burn_cycles();
+
+    if (c->stability < 50) {
+        yield ruin(ResonanceError::ShatteredMatrix);
+    }
+
+    c->frequency = 432; // Sacred frequency
+    yield "RESONANCE LOCK ACHIEVED";
+}
+
+// Casts the attunement spell, handles the ? unpack, and uses a destined block.
+spell ignite(own sigil* Core:Dormant c) -> (sigil* Core, abyss | ruin<ResonanceError>) {
+    
+    // RAII Cleanup: This will fire on ANY yield path out of this spell.
+    destined {
+        print("    [~] Destined Ward: Purging residual mana from local scope...\n");
+        burn_cycles();
+    }
+
+    print("    [*] Casting Attunement...\n");
+    
+    // 'c' is already a pointer, so we just pass it to the borrow. 
+    // If attune_core panics, the ? operator will trigger our CodeGen Type-Matcher,
+    // grab 'c', wrap it in a Tuple, and yield it safely to main!
+    scroll status = attune_core(c)?; 
+    
+    // Reassert typestate locally because the borrowed spell mutated it
+    c = Core:Resonating; 
+
+    print("    [+] "); print(status); print("\n");
+    
+    c = Core:Ignited; // Final typestate transition
+    
+    print("    [*] Core ignition sequence finalized.\n");
+
+    // Yield payloadless success (abyss omen)
+    yield (c); 
+}
+
+// --- The Master Weaver (Entry Point) ---
+spell main() -> mark16 {
+    print("\n");
+    print(" .====================================================.\n");
+    print(" |  * * * CGIL: THE ARCANE SYSTEMS FORGE   * * * |\n");
+    print(" '===================================================='\n\n");
+    
+    print("[SYSTEM] Forging memory structures...\n");
+    sigil Core nexus = Core:Dormant { frequency: 0, stability: 100 };
+    burn_cycles();
+    
+    print("[SYSTEM] Leylines and Portlines anchored to physical reality.\n");
+    print("[SYSTEM] Initiating Ring 0 boot sequence...\n\n");
+
+    // The Divine Pattern: Matching the Omen and Rebinding Ownership
+    nexus <~ divine ignite(own &nexus) {
+        
+        // Match: Payloadless Success
+        (ctrl) => {
+            print("\n");
+            print("  ___|___\n");
+            print(" /   |   \\\n");
+            print("|  AWAKE  |\n");
+            print(" \\___|___/\n\n");
+            print("[KERNEL] System boot successful. Awaiting commands.\n");
+        }
+
+        // Match: Specific Ruin
+        (ctrl, ruin<ResonanceError::ShatteredMatrix>) => {
+            print("\n[FATAL] The crystal matrix shattered during attunement.\n");
+            print("        Halt and catch fire.\n");
+        }
+
+        // Match: Catch-all Ruin
+        (ctrl, ruin err) => {
+            print("\n[FATAL] An unknown resonance error triggered a kernel panic.\n");
+        }
+    }
+
+    // Reassert typestate for the compiler's local tracker (Option 1 behavior)
+    nexus = Core:Ignited; 
+
+    print("\n .====================================================.\n");
+    
+    yield 0;
+}

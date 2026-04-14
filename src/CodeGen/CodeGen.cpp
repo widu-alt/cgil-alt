@@ -801,72 +801,90 @@ void CodeGenVisitor::visit(AssignStmt* node) {
 void CodeGenVisitor::visit(YieldStmt* node) {
     if (currentPhase != Phase::IMPLEMENTATIONS) return;
 
-    if (node->values.empty()) {
+    if (node->values.empty() && (!currentSpell->hasOmen || currentSpell->returnTypes.size() > 1)) {
         if (inDestinedSpell) {
-        // PLAN D: Compute goto target from the stable per-spell base, not the
-        // mutable global counter. The LIFO entry point is the LAST block (highest
-        // index), which naturally falls through to earlier blocks.
-        //
-        // VERIFIED LIFO MATH:
-        //   3 blocks, base = 0: goto targets index 2 (= 0 + 3 - 1).
-        //   LIFO emitter generates labels 2, 1, 0 in that order.
-        //   Execution: label 2 fires first, falls through to 1, falls through to 0.
-        int lifoEntryLabel = currentSpellDestinedBase + (int)currentDestinedBlocks.size() - 1;
-        emitLine("goto __destined_" + std::to_string(lifoEntryLabel) + ";");
-    } else {
+            int lifoEntryLabel = currentSpellDestinedBase + (int)currentDestinedBlocks.size() - 1;
+            emitLine("goto __destined_" + std::to_string(lifoEntryLabel) + ";");
+        } else {
             emitLine("return;");
         }
         return;
     }
 
-    auto emitYieldValue = [&](Expr* val, bool isOmen) {
-        if (isOmen) {
-            std::string omenTypeStr = currentReturnTypeName;
-            if (currentSpell->returnTypes.size() > 1) {
-                omenTypeStr = getOmenTypeName(currentSpell->returnTypes[1].typeToken.lexeme, currentSpell->omenErrorType.lexeme);
-            }
-
-            bool isRuin = false;
-            if (auto* call = dynamic_cast<CallExpr*>(val)) {
-                if (auto* id = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
-                    if (id->token.lexeme == "ruin") isRuin = true;
-                }
-            }
-            
-            // THE FIX: Explicit struct casting required by GCC C99
-            emit("(" + omenTypeStr + ")");
-            if (isRuin) {
-                val->accept(*this);
-            } else {
-                emit("{ .__is_ruin = 0, .__value = ");
-                val->accept(*this);
-                emit(" }");
-            }
-        } else {
-            val->accept(*this);
-        }
-    };
-
     indent();
     if (inDestinedSpell) emit("__ret = ");
     else emit("return ");
 
-    if (node->values.size() == 1) {
-        emitYieldValue(node->values[0].get(), currentSpell && currentSpell->hasOmen);
-    } else {
+    if (currentSpell->returnTypes.size() > 1) {
+        // TUPLE RETURN: Map values to __elemX fields explicitly
         emit("(" + currentReturnTypeName + "){ ");
-        for (size_t i = 0; i < node->values.size(); ++i) {
-            bool isOmen = (currentSpell && currentSpell->hasOmen && i == node->values.size() - 1);
-            emitYieldValue(node->values[i].get(), isOmen);
-            if (i < node->values.size() - 1) emit(", ");
+        for (size_t i = 0; i < currentSpell->returnTypes.size(); ++i) {
+            if (i > 0) emit(", ");
+            emit(".__elem" + std::to_string(i) + " = ");
+
+            bool isOmenSlot = (currentSpell->hasOmen && i == currentSpell->returnTypes.size() - 1);
+
+            if (i < node->values.size()) {
+                // Explicitly provided value
+                Expr* val = node->values[i].get();
+                if (isOmenSlot) {
+                    std::string omenTypeStr = getOmenTypeName(currentSpell->returnTypes[i].typeToken.lexeme, currentSpell->omenErrorType.lexeme);
+                    bool isRuin = false;
+                    if (auto* call = dynamic_cast<CallExpr*>(val)) {
+                        if (auto* id = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
+                            if (id->token.lexeme == "ruin") isRuin = true;
+                        }
+                    }
+                    emit("(" + omenTypeStr + ")");
+                    if (isRuin) {
+                        val->accept(*this);
+                    } else {
+                        bool isAbyss = (currentSpell->returnTypes[i].typeToken.lexeme == "abyss");
+                        if (isAbyss) emit("{ .__is_ruin = 0 }"); // Payloadless
+                        else { emit("{ .__is_ruin = 0, .__value = "); val->accept(*this); emit(" }"); }
+                    }
+                } else {
+                    val->accept(*this);
+                }
+            } else if (isOmenSlot) {
+                // Missing value for Omen slot -> Implicit Payloadless Success
+                std::string omenTypeStr = getOmenTypeName(currentSpell->returnTypes[i].typeToken.lexeme, currentSpell->omenErrorType.lexeme);
+                emit("(" + omenTypeStr + "){ .__is_ruin = 0 }");
+            } else {
+                emit("0"); // Fallback for mismatched non-omen slots
+            }
         }
         emit(" }");
+    } else {
+        // SINGLE RETURN OR BARE OMEN
+        if (node->values.empty() && currentSpell->hasOmen) {
+            emit("(" + currentReturnTypeName + "){ .__is_ruin = 0 }");
+        } else if (!node->values.empty()) {
+            Expr* val = node->values[0].get();
+            if (currentSpell->hasOmen) {
+                bool isRuin = false;
+                if (auto* call = dynamic_cast<CallExpr*>(val)) {
+                    if (auto* id = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
+                        if (id->token.lexeme == "ruin") isRuin = true;
+                    }
+                }
+                emit("(" + currentReturnTypeName + ")");
+                if (isRuin) {
+                    val->accept(*this);
+                } else {
+                    bool isAbyss = (currentSpell->returnTypes[0].typeToken.lexeme == "abyss");
+                    if (isAbyss) emit("{ .__is_ruin = 0 }"); // Payloadless
+                    else { emit("{ .__is_ruin = 0, .__value = "); val->accept(*this); emit(" }"); }
+                }
+            } else {
+                val->accept(*this);
+            }
+        }
     }
+    
     emit(";\n");
 
     if (inDestinedSpell) {
-        // PLAN D BUGFIX: Use the stable per-spell base for value-yielding paths.
-        // This matches the empty-yield path at the top of the function.
         int lifoEntryLabel = currentSpellDestinedBase + (int)currentDestinedBlocks.size() - 1;
         emitLine("goto __destined_" + std::to_string(lifoEntryLabel) + ";");
     }
@@ -1144,22 +1162,42 @@ void CodeGenVisitor::visit(PostfixExpr* node) {
     emit("; ");
     emit("if (_omen_tmp_.__is_ruin) { ");
 
-    // THE FIX: Unpack the ruin and repackage it into the OUTER spell's exact return type.
-    if (inDestinedSpell && !currentDestinedBlocks.empty()) {
-        // PLAN D BUGFIX: Use the stable per-spell base, just like YieldStmt.
-        // globalDestinedCounter is pre-incremented now, so reading it here generates
-        // an out-of-bounds label index.
-        int lastDeclared = currentSpellDestinedBase + (int)currentDestinedBlocks.size() - 1;
-        if (currentSpell->returnTypes.size() > 1) {
-            std::string expectedOmen = getOmenTypeName(currentSpell->returnTypes[1].typeToken.lexeme, currentSpell->omenErrorType.lexeme);
-            emit("__ret.__elem1 = (" + expectedOmen + "){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }; ");
-        } else {
-            emit("__ret = (" + currentReturnTypeName + "){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }; ");
+    // THE FIX: Type-Matching Early Return Resolver
+    // Dynamically maps local parameters to the required return tuple slots during a panic.
+    std::string rhs;
+    if (currentSpell->returnTypes.size() > 1) {
+        rhs = "(" + currentReturnTypeName + "){ ";
+        for (size_t i = 0; i < currentSpell->returnTypes.size(); ++i) {
+            if (i > 0) rhs += ", ";
+            rhs += ".__elem" + std::to_string(i) + " = ";
+
+            // Is this the final element AND the spell has an Omen?
+            if (i == currentSpell->returnTypes.size() - 1 && currentSpell->hasOmen) {
+                std::string expectedOmen = getOmenTypeName(currentSpell->returnTypes[i].typeToken.lexeme, currentSpell->omenErrorType.lexeme);
+                rhs += "(" + expectedOmen + "){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }";
+            } else {
+                // Scan parameters for a type match
+                std::string matchedVar = "0"; // Safe fallback for unmapped slots
+                for (const auto& param : currentSpell->params) {
+                    if (param.type.lexeme == currentSpell->returnTypes[i].typeToken.lexeme &&
+                        param.isPointer == currentSpell->returnTypes[i].isPointer) {
+                        matchedVar = param.name.lexeme;
+                        break;
+                    }
+                }
+                rhs += matchedVar;
+            }
         }
-        emit("goto __destined_" + std::to_string(lastDeclared) + "; ");
+        rhs += " }";
     } else {
-        // Standard early return wrapper
-        emit("return (" + currentReturnTypeName + "){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }; ");
+        rhs = "(" + currentReturnTypeName + "){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }";
+    }
+
+    if (inDestinedSpell && !currentDestinedBlocks.empty()) {
+        int lastDeclared = currentSpellDestinedBase + (int)currentDestinedBlocks.size() - 1;
+        emit("__ret = " + rhs + "; goto __destined_" + std::to_string(lastDeclared) + "; ");
+    } else {
+        emit("return " + rhs + "; ");
     }
     emit("} ");
 

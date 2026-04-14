@@ -1,6 +1,6 @@
-# =============================================================================
-# CGIL COMPILER FORGE MAKEFILE (FIXED SHELL COMPATIBILITY)
-# =============================================================================
+# =============================
+# CGIL COMPILER FORGE MAKEFILE
+# =============================
 
 SHELL := cmd.exe
 
@@ -30,7 +30,6 @@ $(TARGET): $(OBJS)
 	@$(CXX) $(CXXFLAGS) -o $@ $^
 	@echo Success! Cgil engine forged.
 
-# This rule uses a simple mkdir that works across most environments
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@if not exist $(subst /,\,$(dir $@)) mkdir $(subst /,\,$(dir $@))
 	@echo [CXX] $<

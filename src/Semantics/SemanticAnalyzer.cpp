@@ -865,7 +865,7 @@ void SemanticAnalyzer::visit(AssignStmt* node) {
 //   warden spell  → HARD ERROR  (ISR + FPU = definite panic)
 //   normal context → WARNING    (risky but not always fatal)
 //
-// NULL SAFETY (Gemini's amendment):
+// NULL SAFETY:
 //   SigilDecl fields are processed at global scope where currentSpell == nullptr.
 //   We MUST check currentSpell != nullptr before accessing isWarden.
 void SemanticAnalyzer::warnIfFlow(Token typeToken) {
@@ -896,7 +896,7 @@ void SemanticAnalyzer::warnIfFlow(Token typeToken) {
 // This function is STATELESS — it does not read typeRegistry, symbols, or
 // currentExprType. It operates purely on the AST node shape.
 //
-// RATIFIED WHITELIST (from joint Claude + Gemini audit):
+// RATIFIED WHITELIST:
 //
 //   IdentifierExpr: valid ONLY if stanceName AND variantName are both empty.
 //     → Disk:Fault is NOT an lvalue (it is a stance constant, not a variable).
@@ -912,7 +912,6 @@ void SemanticAnalyzer::warnIfFlow(Token typeToken) {
 //
 //   UnaryExpr(STAR): pointer dereference is an lvalue.
 //     → *ptr = 5                 valid
-//     (Gemini's amendment — this was missing from the original design.)
 //
 //   EVERYTHING ELSE: not an lvalue.
 //     LiteralExpr, CallExpr, PostfixExpr(?), AddressOfExpr(&x),

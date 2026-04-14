@@ -96,7 +96,7 @@ int main(int argc, char* argv[]) {
         auto tokens = lexer.tokenize();
         Parser parser(tokens);
         
-        // FIX 1: Wrap the raw vector of declarations into the root AST node
+        // Wrap the raw vector of declarations into the root AST node
         ProgramNode program;
         program.declarations = parser.parse();
 
@@ -106,13 +106,11 @@ int main(int argc, char* argv[]) {
 
         std::cout << "[4/4] Code Generation...\n";
         
-        // FIX 2: Feed a stringstream directly into the CodeGen constructor
+        // Feed a stringstream directly into the CodeGen constructor
         std::ostringstream cCodeStream;
         CodeGenVisitor codegen(cCodeStream);
         codegen.generate(&program);
         std::string cCode = cCodeStream.str();
-
-        // 3. Write intermediate C file
 
         // 3. Write intermediate C file
         std::ofstream outC(cFilename);
