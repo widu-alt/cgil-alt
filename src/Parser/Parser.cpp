@@ -585,6 +585,10 @@ std::unique_ptr<WhirlStmt> Parser::parseWhirlStmt() {
 // rewritten during CodeGen into: __ret = <values>; goto __destined_N;
 // The YieldStmt node itself does not know about this rewrite — CodeGen handles it
 // by scanning the parent spell for destined blocks during emission.
+// yield (ctrl, data);   yield 0;   yield;
+//
+// FIXED: Uses lookahead to distinguish between a tuple yield (which contains a comma)
+// and a parenthesized single-value yield (e.g., yield (a + b) * c;).
 std::unique_ptr<YieldStmt> Parser::parseYieldStmt() {
     auto node = std::make_unique<YieldStmt>();
     node->token = previous(); // 'yield' token
@@ -594,14 +598,32 @@ std::unique_ptr<YieldStmt> Parser::parseYieldStmt() {
         return node; // Void return — values vector is empty
     }
 
-    if (match({TokenType::LPAREN})) {
+    // LOOKAHEAD: Is this a tuple yield `yield (a, b)` or a math expression `yield (a + b)`?
+    bool isTuple = false;
+    if (check(TokenType::LPAREN)) {
+        int depth = 0;
+        for (size_t i = current; i < tokens.size(); i++) {
+            if (tokens[i].type == TokenType::LPAREN) depth++;
+            else if (tokens[i].type == TokenType::RPAREN) {
+                depth--;
+                if (depth == 0) break; // Reached the end of the top-level parens
+            } else if (tokens[i].type == TokenType::COMMA && depth == 1) {
+                isTuple = true; // Found a comma at the top level! It's a tuple.
+                break;
+            }
+        }
+    }
+
+    if (isTuple) {
         // Tuple return: yield (ctrl, ruin(DiskError::HardwareFault));
+        consume(TokenType::LPAREN, "Expected '(' before tuple yield.");
         do {
             node->values.push_back(parseExpression());
         } while (match({TokenType::COMMA}));
         consume(TokenType::RPAREN, "Expected ')' after tuple yield values.");
     } else {
-        // Single value: yield 0;
+        // Single value: yield 0; or yield (a + b) * c;
+        // We do NOT consume the LPAREN here; we let parseExpression handle the math parens.
         node->values.push_back(parseExpression());
     }
 
@@ -865,7 +887,8 @@ std::unique_ptr<Expr> Parser::parsePrecedence(int minPrecedence) {
         // Pointer dereference: *ptr
         case TokenType::MINUS:
         case TokenType::STAR:
-            left = std::make_unique<UnaryExpr>(tok, parsePrecedence(7));
+        case TokenType::TILDE:  // P1 FIX
+            left = std::make_unique<UnaryExpr>(tok, parsePrecedence(90));
             break;
 
         // ruin(DiskError::HardwareFault) — error value construction in yield.
@@ -1021,23 +1044,32 @@ std::unique_ptr<StructInitExpr> Parser::parseStructInitExpr(Token typeName, Toke
 //   | (Omen Union)           1
 int Parser::getPrecedence(TokenType type) const {
     switch (type) {
-        case TokenType::QUESTION:  return 8; // ?  Omen unpack
-        case TokenType::LPAREN:    return 8; // () Function call (same as ?)
+        case TokenType::LBRACKET:  return 100;
+        case TokenType::QUESTION:
+        case TokenType::LPAREN:    return 90;
         case TokenType::ARROW:
-        case TokenType::DOT:       return 7; // ->, .  Member access
+        case TokenType::DOT:       return 80;
         case TokenType::STAR:
-        case TokenType::SLASH:     return 6; // *,  /
+        case TokenType::SLASH:
+        case TokenType::PERCENT:   return 70; // P1: Modulo
         case TokenType::PLUS:
-        case TokenType::MINUS:     return 5; // +,  -
+        case TokenType::MINUS:     return 60;
+        case TokenType::LSHIFT:
+        case TokenType::RSHIFT:    return 50; // P1: Shifts
         case TokenType::EQ:
         case TokenType::NEQ:
         case TokenType::GT:
-        case TokenType::LT:        return 4; // ==, !=, >, <
-        case TokenType::WEAVE:     return 3; // ~>  Weave / pipeline
-        case TokenType::REV_WEAVE: return 2; // <~  Reverse weave / extract
-        case TokenType::PIPE:      return 1; // |   Omen union (lowest)
-        case TokenType::LBRACKET:  return 90;
-        default:                   return 0; // Not an infix operator
+        case TokenType::LT:
+        case TokenType::GEQ:
+        case TokenType::LEQ:       return 40; // P1: Bounds
+        case TokenType::AMP:       // Bitwise AND
+        case TokenType::CARET:     return 30; // P1: Bitwise XOR
+        case TokenType::AMPAMP:    return 25; // P1: Logical AND
+        case TokenType::PIPEPIPE:  return 20; // P1: Logical OR
+        case TokenType::WEAVE:     return 15;
+        case TokenType::REV_WEAVE: return 10;
+        case TokenType::PIPE:      return 5;  // Omen union
+        default:                   return 0;
     }
 }
 

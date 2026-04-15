@@ -1,5 +1,7 @@
 #include "../../include/CodeGen/CodeGen.h"
 #include <sstream>
+#include <set>
+#include <string>
 
 // =============================================================================
 // MAIN ENTRY POINT
@@ -1024,7 +1026,6 @@ void CodeGenVisitor::visit(DivineStmt* node) {
     node->spellCall->accept(*this);
     emit(";\n");
 
-    // THE FIX: Dereference the ownership pointer if the target is a stack value
     bool isPointer = stancePointerVars.count(node->targetVar.lexeme) > 0;
     if (isPointer) {
         emitLine(node->targetVar.lexeme + " = __result.__elem0; /* <~ ownership rebound */");
@@ -1033,9 +1034,15 @@ void CodeGenVisitor::visit(DivineStmt* node) {
     }
     emitLine("");
 
+    // THE FIX (P0 Issue 2): Save the outer set so branch variables don't permanently pollute the spell
+    auto outerStancePointerVars = stancePointerVars;
+
     bool isFirst = true;
     for (auto& branch : node->branches) {
+        // Reset to the outer scope before each branch, then add the branch owner
+        stancePointerVars = outerStancePointerVars;
         stancePointerVars.insert(branch.ownerVar.lexeme);
+        
         indent();
 
         if (!branch.isRuin) {
@@ -1078,6 +1085,8 @@ void CodeGenVisitor::visit(DivineStmt* node) {
         isFirst = false;
     }
     emitLine("");
+    // THE FIX (P0 Issue 2): Restore the outer scope map
+    stancePointerVars = outerStancePointerVars;
     emitLine("} // --- end divine block ---");
 }
 

@@ -426,23 +426,7 @@ void SemanticAnalyzer::visit(ForeStmt* node) {
 
     loopDepth--;
 
-    // Check the increment expression (e.g., i = i + 1).
-    // STRICT ENFORCEMENT: The LHS of the increment MUST be the loop variable.
     if (node->increment) {
-        auto* assignExpr = dynamic_cast<AssignExpr*>(node->increment.get());
-        IdentifierExpr* incIdent = nullptr;
-
-        if (assignExpr) {
-            incIdent = dynamic_cast<IdentifierExpr*>(assignExpr->target.get());
-        } else {
-            incIdent = dynamic_cast<IdentifierExpr*>(node->increment.get());
-        }
-
-        if (!incIdent || incIdent->token.lexeme != node->initVar.lexeme) {
-            error(node->token, 
-                  "Loop increment must modify the loop variable '" + node->initVar.lexeme + "'. "
-                  "Invalid loop header.");
-        }
         evaluate(node->increment.get());
     }
 
@@ -511,38 +495,33 @@ void SemanticAnalyzer::visit(DestinedStmt* node) {
     // is equally catastrophic. We use a depth-first walk of the cleanup body.
     //
     // This helper lambda walks the block recursively and errors on any YieldStmt.
-    std::function<void(BlockStmt*)> checkNoYield = [&](BlockStmt* block) {
+    std::function<void(BlockStmt*)> checkNoJumpStmt = [&](BlockStmt* block) {
         for (auto& stmt : block->statements) {
-            if (dynamic_cast<YieldStmt*>(stmt.get())) {
+            if (dynamic_cast<YieldStmt*>(stmt.get()) ||
+                dynamic_cast<ShatterStmt*>(stmt.get()) ||
+                dynamic_cast<SurgeStmt*>(stmt.get())) {
                 error(stmt->token,
-                      "'yield' inside a 'destined' cleanup block is illegal. "
-                      "The destined block executes AFTER yield — it runs during "
-                      "cleanup, not as a return path. Placing yield here creates "
-                      "an infinite goto loop in the generated C. "
-                      "Use 'destined' only for cleanup side effects (e.g., stance "
-                      "resets, port writes). To return early, yield before the "
-                      "destined block is reached.");
+                      "Control flow jumps ('yield', 'shatter', 'surge') are illegal "
+                      "inside a 'destined' block. The destined block executes AFTER "
+                      "loop bounds and returns are evaluated. Placing jumps here produces invalid C.");
             }
-            // Recurse into nested control flow so we catch:
-            //   destined { if (cond) { yield 0; } }
             if (auto* ifStmt = dynamic_cast<IfStmt*>(stmt.get())) {
-                checkNoYield(ifStmt->thenBranch.get());
+                checkNoJumpStmt(ifStmt->thenBranch.get());
                 for (auto& elif : ifStmt->elifBranches) {
-                    checkNoYield(elif.body.get());
+                    checkNoJumpStmt(elif.body.get());
                 }
-                if (ifStmt->elseBranch) checkNoYield(ifStmt->elseBranch.get());
+                if (ifStmt->elseBranch) checkNoJumpStmt(ifStmt->elseBranch.get());
             }
             if (auto* whirl = dynamic_cast<WhirlStmt*>(stmt.get())) {
-                checkNoYield(whirl->body.get());
+                checkNoJumpStmt(whirl->body.get());
             }
             if (auto* fore = dynamic_cast<ForeStmt*>(stmt.get())) {
-                checkNoYield(fore->body.get());
+                checkNoJumpStmt(fore->body.get());
             }
         }
     };
-    checkNoYield(node->body.get());
+    checkNoJumpStmt(node->body.get());
 
-    // Body is safe — now walk it for normal type/ownership checks.
     for (auto& stmt : node->body->statements) {
         stmt->accept(*this);
     }
@@ -948,6 +927,11 @@ bool SemanticAnalyzer::isLvalue(Expr* expr) const {
 void SemanticAnalyzer::visit(VarDeclStmt* node) {
     if (isPassOne) return;
 
+    // THE FIX (P2 Issue 7): Reserved Compiler Internals
+    if (node->name.lexeme.rfind("__", 0) == 0) {
+        error(node->name, "Variable names beginning with '__' are reserved for Cgil compiler internals.");
+    }
+
     auto varType = resolveType(node->typeToken);
 
     // PLAN A: Centralized FPU warning — replaces the old inline check.
@@ -1067,7 +1051,11 @@ void SemanticAnalyzer::visit(BinaryExpr* node) {
         case TokenType::NEQ:
         case TokenType::GT:
         case TokenType::LT:
-            // Comparisons always produce a boolean-like result.
+        case TokenType::GEQ:      // P1 FIX
+        case TokenType::LEQ:      // P1 FIX
+        case TokenType::AMPAMP:   // P1 FIX
+        case TokenType::PIPEPIPE: // P1 FIX
+            // Comparisons and logicals produce oath (boolean).
             currentExprType = typeRegistry["oath"];
             break;
 
@@ -1503,10 +1491,12 @@ void SemanticAnalyzer::visit(AddressOfExpr* node) {
     if (ident) {
         Symbol* sym = symbols.lookup(ident->token.lexeme);
         if (sym && sym->isHardware) {
-            // Hardware address-of: &portline_name -> compile-time addr constant.
-            // CodeGen will emit: ((uint16_t)0xADDR) not &variable.
             currentExprType = typeRegistry["addr"];
             return;
+        }
+        // THE FIX (P2 Issue 6): Ownership Escape Prevention
+        if (sym && sym->isOwned) {
+            error(node->token, "Cannot take the address of an 'own' pointer — this creates an alias that bypasses ownership typestate tracking.");
         }
     }
 

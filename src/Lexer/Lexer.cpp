@@ -75,40 +75,47 @@ void Lexer::scanToken() {
         case '+': addToken(TokenType::PLUS); break;
         case '?': addToken(TokenType::QUESTION); break;
         case '@': addToken(TokenType::AT); break;
-        case '&': addToken(TokenType::AMP); break;
-        case '|': addToken(TokenType::PIPE); break;
+        case '^': addToken(TokenType::CARET); break;   // P1 FIX: Bitwise XOR
+        case '%': addToken(TokenType::PERCENT); break; // P1 FIX: Modulo
 
         // One or two character operators
         case ':': addToken(match(':') ? TokenType::SCOPE : TokenType::COLON); break;
         case '=': 
-            if (match('=')) {
-                addToken(TokenType::EQ);
-            } else if (match('>')) {
-                addToken(TokenType::FAT_ARROW);
-            } else {
-                addToken(TokenType::ASSIGN);
-            }
-            break;
-        case '>': addToken(TokenType::GT); break;
-        
-        case '!': 
-            if (match('=')) {
-                addToken(TokenType::NEQ);
-            } else {
-                throw std::runtime_error("Unexpected '!' at line " + std::to_string(line) + ", col " + std::to_string(column));
-            }
+            if (match('=')) addToken(TokenType::EQ);
+            else if (match('>')) addToken(TokenType::FAT_ARROW);
+            else addToken(TokenType::ASSIGN);
             break;
             
-        case '<': 
-            addToken(match('~') ? TokenType::REV_WEAVE : TokenType::LT); 
+        case '!': 
+            if (match('=')) addToken(TokenType::NEQ);
+            else throw std::runtime_error("Unexpected '!' at line " + std::to_string(line) + ", col " + std::to_string(column));
             break;
+
+        case '&': 
+            addToken(match('&') ? TokenType::AMPAMP : TokenType::AMP); // P1 FIX: Logical AND vs Bitwise/Address
+            break;
+
+        case '|': 
+            addToken(match('|') ? TokenType::PIPEPIPE : TokenType::PIPE); // P1 FIX: Logical OR vs Union
+            break;
+
         case '~': 
-            if (match('>')) {
-                addToken(TokenType::WEAVE);
-            } else {
-                throw std::runtime_error("Unexpected '~' at line " + std::to_string(line) + ". Did you mean '~>'?");
-            }
+            addToken(match('>') ? TokenType::WEAVE : TokenType::TILDE); // P1 FIX: Weave vs Bitwise NOT
             break;
+
+        case '<': 
+            if (match('~')) addToken(TokenType::REV_WEAVE);
+            else if (match('<')) addToken(TokenType::LSHIFT); // P1 FIX: Left Shift
+            else if (match('=')) addToken(TokenType::LEQ);    // P1 FIX: Less Than or Equal
+            else addToken(TokenType::LT); 
+            break;
+
+        case '>': 
+            if (match('>')) addToken(TokenType::RSHIFT); // P1 FIX: Right Shift
+            else if (match('=')) addToken(TokenType::GEQ);    // P1 FIX: Greater Than or Equal
+            else addToken(TokenType::GT);
+            break;
+
         case '-': 
             addToken(match('>') ? TokenType::ARROW : TokenType::MINUS); 
             break;

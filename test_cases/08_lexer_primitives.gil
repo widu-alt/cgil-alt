@@ -1,0 +1,107 @@
+// =============================================================================
+// CGIL ISOLATED TEST 08: Lexer Primitives & Verbose Output
+// =============================================================================
+
+pact <stdio.h>;
+conjure spell putchar(mark32 c) -> mark32;
+
+// --- Helper Spells ---
+spell print(scroll msg) -> abyss {
+    fore (mark16 i = 0; i < msg.len; i = i + 1) {
+        putchar(msg.ptr[i]);
+    }
+}
+
+// A true systems flex: Our own integer-to-ASCII spell in pure Cgil!
+spell print_num(mark16 val) -> abyss {
+    if (val == 0) {
+        putchar(48); // ASCII '0'
+        yield;
+    }
+
+    mark16 divisor = 10000;
+    oath started = forsaken;
+
+    whirl (divisor > 0) {
+        mark16 digit = val / divisor;
+        if (digit > 0 || started == kept) {
+            putchar(digit + 48); // Add 48 to get ASCII character
+            started = kept;
+            val = val % divisor;
+        }
+        divisor = divisor / 10;
+    }
+}
+
+// --- Character Classification Spells ---
+spell is_alpha(rune c) -> oath {
+    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) {
+        yield kept;
+    }
+    yield forsaken;
+}
+
+spell is_digit(rune c) -> oath {
+    if (c >= 48 && c <= 57) {
+        yield kept;
+    }
+    yield forsaken;
+}
+
+// --- The Scanner ---
+spell scan_text(scroll text) -> mark16 {
+    mark16 alphas = 0;
+    mark16 digits = 0;
+    mark16 spaces = 0;
+
+    fore (mark16 i = 0; i < text.len; i = i + 1) {
+        rune c = text.ptr[i];
+
+        if (is_alpha(c) == kept) {
+            alphas = alphas + 1;
+        } elif (is_digit(c) == kept) {
+            digits = digits + 1;
+        } elif (c == 32) {
+            spaces = spaces + 1;
+        }
+    }
+
+    mark16 parity  = alphas % 2;
+    mark16 shifted = digits << 1;
+    mark16 masked  = spaces & 0x0F;
+    mark16 flipped = alphas ^ digits;
+
+    // The Verbose Output
+    print("\n--- LEXER METRICS ---\n");
+    print("Alphas found : "); print_num(alphas); print("\n");
+    print("Digits found : "); print_num(digits); print("\n");
+    print("Spaces found : "); print_num(spaces); print("\n");
+
+    print("\n--- BITWISE & MATH OPERATIONS ---\n");
+    print("Parity  (alphas % 2)      : "); print_num(parity); print("\n");
+    print("Shifted (digits << 1)     : "); print_num(shifted); print("\n");
+    print("Masked  (spaces & 0x0F)   : "); print_num(masked); print("\n");
+    print("Flipped (alphas ^ digits) : "); print_num(flipped); print("\n");
+    print("-------------------------\n");
+
+    yield (alphas * 100) + (digits * 10) + spaces;
+}
+
+// --- The Test Runner ---
+spell main() -> mark16 {
+    scroll code = "spell main() -> mark16 { return 0; } 42";
+
+    print("\n[SYSTEM] Scanning code: \""); print(code); print("\"\n");
+
+    mark16 result = scan_text(code);
+
+    print("Final Computed Hash: "); print_num(result); print("\n");
+
+    if (result == 1958) {
+        print("\nTEST 08: Lexer Primitives & New Operators ... OK\n");
+    } else {
+        print("\n-> FAIL: Lexer primitive counts did not match expected hash.\n");
+    }
+
+    yield 0;
+}
