@@ -86,6 +86,7 @@ struct AddressOfExpr;
 struct IndexExpr;
 struct StructInitExpr;
 struct AssignExpr;
+struct CastExpr;
 
 // =============================================================================
 // THE VISITOR INTERFACE
@@ -134,6 +135,7 @@ public:
     virtual void visit(IndexExpr*      node) = 0;
     virtual void visit(StructInitExpr* node) = 0;
     virtual void visit(AssignExpr*     node) = 0;
+    virtual void visit(CastExpr*       node) = 0;
 };
 
 // =============================================================================
@@ -737,6 +739,18 @@ struct AssignExpr : public Expr {
     AssignExpr(std::unique_ptr<Expr> t, Token o, std::unique_ptr<Expr> v)
         : target(std::move(t)), op(o), value(std::move(v)) {
         token = o;
+    }
+    void accept(ASTVisitor& visitor) override { visitor.visit(this); }
+};
+
+// cast<mark32>(val) — explicit type conversion
+struct CastExpr : public Expr {
+    Token                 targetType; 
+    std::unique_ptr<Expr> operand;
+
+    CastExpr(Token targetTok, std::unique_ptr<Expr> op)
+        : targetType(targetTok), operand(std::move(op)) {
+        token = targetTok;
     }
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };

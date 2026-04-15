@@ -1521,3 +1521,12 @@ void CodeGenVisitor::visit(AssignExpr* node) {
     emit(" = ");
     node->value->accept(*this);
 }
+
+void CodeGenVisitor::visit(CastExpr* node) {
+    if (currentPhase != Phase::IMPLEMENTATIONS) return;
+
+    std::string cType = getCType(node->targetType);
+    emit("((" + cType + ")(");
+    node->operand->accept(*this);
+    emit("))");
+}

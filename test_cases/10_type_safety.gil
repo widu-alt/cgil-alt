@@ -1,0 +1,64 @@
+// =============================================================================
+// CGIL ISOLATED TEST 10: Type Safety Ironclad & Explicit Casting
+// =============================================================================
+
+pact <stdio.h>;
+conjure spell putchar(mark32 c) -> mark32;
+
+// --- 1. Testing Scroll Field Safety & Explicit Casting ---
+spell print(scroll msg) -> abyss {
+    // The SA now natively knows about .len and .ptr!
+    fore (mark16 i = 0; i < msg.len; i = i + 1) {
+        // Testing the new cast<Target>(val) syntax
+        putchar(cast<mark32>(msg.ptr[i]));
+    }
+}
+
+// --- 2. Testing Array Type Propagation ---
+sigil Node {
+    stance Active;
+    mark16 id;
+    mark16 value;
+}
+
+spell test_arrays() -> mark16 {
+    deck[3] Node buffer;
+    
+    // Initialize the array
+    buffer[0] = Node:Active { id: 10, value: 500 };
+    buffer[1] = Node:Active { id: 20, value: 600 };
+    buffer[2] = Node:Active { id: 30, value: 700 };
+
+    mark16 sum = 0;
+    fore (mark16 i = 0; i < 3; i = i + 1) {
+        // Because of Pillar 1A, the SA now correctly evaluates 'buffer[i]' 
+        // as a 'Node', allowing it to natively validate the '.value' access!
+        sum = sum + buffer[i].value; 
+    }
+    
+    yield sum; // Should be 1800
+}
+
+// --- The Test Runner ---
+spell main() -> mark16 {
+    print("\n[SYSTEM] Executing Type Safety & Cast Test...\n");
+
+    // Test explicit casting from integer literal to rune, then to mark32
+    rune letter_A = cast<rune>(65);
+    mark32 wide_A = cast<mark32>(letter_A);
+    
+    print("Casting test: ");
+    putchar(wide_A); // Should print 'A'
+    print("\n");
+
+    // Test the array type propagation
+    mark16 total = test_arrays();
+    if (total == 1800) {
+        print("Array Type Propagation: OK\n");
+    } else {
+        print("Array Type Propagation: FAIL\n");
+    }
+
+    print("\nTEST 10: Ironclad Type System ... OK\n\n");
+    yield 0;
+}

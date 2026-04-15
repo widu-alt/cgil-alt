@@ -39,7 +39,8 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords = {
     {"kept", TokenType::KEPT},
     {"forsaken", TokenType::FORSAKEN},
     {"deck", TokenType::DECK},
-    {"tuple", TokenType::TUPLE}
+    {"tuple", TokenType::TUPLE},
+    {"cast", TokenType::CAST}
 };
 
 Lexer::Lexer(std::string source) : source(std::move(source)) {}

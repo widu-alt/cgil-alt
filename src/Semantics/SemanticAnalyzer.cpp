@@ -427,8 +427,15 @@ void SemanticAnalyzer::visit(ForeStmt* node) {
     loopDepth--;
 
     if (node->increment) {
-        evaluate(node->increment.get());
+    // Warn if increment is not an assignment — this is almost certainly a bug
+    if (!dynamic_cast<AssignExpr*>(node->increment.get())) {
+        std::cerr << "[Semantic Warning Line " << node->token.line << "] "
+                  << "Loop increment is not an assignment expression. "
+                  << "The loop variable '" << node->initVar.lexeme 
+                  << "' may never be modified, causing an infinite loop.\n";
     }
+    evaluate(node->increment.get());
+}
 
     symbols.exitScope(); // Loop variable goes out of scope
 }
@@ -958,14 +965,16 @@ void SemanticAnalyzer::visit(VarDeclStmt* node) {
         }
     }
 
-    // Register it in the current scope with the correct initial stance
-    symbols.declare(
-        node->name.lexeme, 
-        varType, 
-        false, 
-        initialStance, 
-        false
-    );
+    // Array Element Type Propagation
+    if (node->isArray) {
+        auto arrayType = std::make_shared<TypeInfo>(
+            TypeInfo{TypeKind::PRIMITIVE, "__array_" + varType->name}
+        );
+        arrayType->elementType = varType;
+        symbols.declare(node->name.lexeme, arrayType, false, initialStance, false);
+    } else {
+        symbols.declare(node->name.lexeme, varType, false, initialStance, false);
+    }
 }
 
 // =============================================================================
@@ -1024,19 +1033,13 @@ void SemanticAnalyzer::visit(BinaryExpr* node) {
                 currentExprType = typeRegistry.count("soul16")
                     ? typeRegistry["soul16"]
                     : leftType;
-            } else if (rightIdent && leftType &&
-                       leftType->kind == TypeKind::SIGIL &&
-                       leftType->fields.count(rightIdent->token.lexeme)) {
-                // Known field on a known sigil — return the field's type.
-                currentExprType = leftType->fields.at(rightIdent->token.lexeme);
+            } else if (leftType && leftType->kind == TypeKind::PRIMITIVE && !leftType->fields.empty()) {
+                // THE FIX (1B): Reject unknown fields on registered primitives (like scroll)
+                error(node->token, "Unknown field '" + rightIdent->token.lexeme + "' on type '" + leftType->name + "'.");
             } else {
-                // Unknown field or non-sigil type — fall back to leftType.
-                // This covers hardware types, union access patterns, and any
-                // field that was not registered (e.g., missing in Pass 2).
-                // V1.5: Turn this fallback into a hard error once all sigil
-                // fields are guaranteed to be in the TypeInfo field map.
                 currentExprType = leftType;
             }
+            
             break;
         }
 
@@ -1518,18 +1521,19 @@ void SemanticAnalyzer::visit(IndexExpr* node) {
 
     auto targetType = evaluate(node->target.get());
     auto indexType  = evaluate(node->index.get());
-
-    // V1: Accept any index type (like C does for array subscripts).
-    // V1.5 TODO: Enforce index is mark16, soul16, or addr.
     (void)indexType;
 
-    // V1: Return mark16 as the element type — conservative safe default.
-    // V1.5 TODO: Return targetType->elementType when array TypeInfo carries it.
+    // THE FIX (1A): Return the actual element type so field access works
+    if (targetType && targetType->elementType) {
+        currentExprType = targetType->elementType;
+        return;
+    }
+
+    // Fallback for unknown arrays
     currentExprType = typeRegistry.count("mark16")
         ? typeRegistry["mark16"]
         : std::make_shared<TypeInfo>(TypeInfo{TypeKind::PRIMITIVE, "mark16"});
 }
-
 // Struct/sigil initializer: Device:Idle { device_id: 0, error_code: 0, flags: 0 }
 //
 // Validates:
@@ -1593,5 +1597,24 @@ void SemanticAnalyzer::visit(AssignExpr* node) {
     auto targetType = evaluate(node->target.get());
     auto valueType  = evaluate(node->value.get());
     (void)valueType; // V1.5 TODO: strict type compatibility check
+    currentExprType = targetType;
+}
+
+void SemanticAnalyzer::visit(CastExpr* node) {
+    if (isPassOne) return;
+
+    auto operandType = evaluate(node->operand.get());
+    auto targetType  = resolveType(node->targetType);
+
+    if (targetType->name == "abyss") {
+        error(node->targetType, "Cannot cast to 'abyss'. Use 'yield;' for void returns.");
+    }
+    if (operandType && operandType->kind == TypeKind::SIGIL) {
+        error(node->token, "Cannot cast sigil type '" + operandType->name + "'. Access fields directly.");
+    }
+    if (targetType->kind == TypeKind::SIGIL) {
+        error(node->targetType, "Cannot cast to sigil type '" + targetType->name + "'.");
+    }
+
     currentExprType = targetType;
 }

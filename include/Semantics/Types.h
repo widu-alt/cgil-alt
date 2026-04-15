@@ -111,6 +111,11 @@ struct TypeInfo {
     // Empty for non-SIGIL types.
     std::unordered_map<std::string, std::shared_ptr<TypeInfo>> fields;
 
+    // --- For ARRAY types (deck[N] T) ---
+    // Populated when a deck variable is declared in visit(VarDeclStmt*).
+    // Returned by visit(IndexExpr*) so that buf[i].field has the correct type.
+    std::shared_ptr<TypeInfo> elementType = nullptr;
+
     // ADDED CONSTRUCTOR: Silences GCC's -Wmissing-field-initializers warnings
     TypeInfo(TypeKind k, std::string n, 
              std::shared_ptr<TypeInfo> s = nullptr, 

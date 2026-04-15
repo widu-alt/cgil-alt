@@ -124,6 +124,7 @@ public:
     void visit(IndexExpr*      node) override;
     void visit(StructInitExpr* node) override;
     void visit(AssignExpr*     node) override;
+    void visit(CastExpr*       node) override;
 
 private:
     // =========================================================================

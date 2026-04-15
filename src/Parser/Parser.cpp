@@ -905,6 +905,18 @@ std::unique_ptr<Expr> Parser::parsePrecedence(int minPrecedence) {
             left = std::move(callNode);
             break;
         }
+        
+        // cast<TargetType>(expr) — explicit type conversion
+        case TokenType::CAST: {
+            consume(TokenType::LT, "Expected '<' after 'cast'.");
+            Token targetType = consumeType("Expected a valid target type inside 'cast<...>'.");
+            consume(TokenType::GT, "Expected '>' after cast target type.");
+            consume(TokenType::LPAREN, "Expected '(' after 'cast<Type>'.");
+            auto operand = parseExpression();
+            consume(TokenType::RPAREN, "Expected ')' after cast expression.");
+            left = std::make_unique<CastExpr>(targetType, std::move(operand));
+            break;
+        }
 
         default:
             error(tok, "Expected an expression.");
