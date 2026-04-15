@@ -41,6 +41,13 @@ spell check_sector(mark16 sector) -> scroll | ruin<DiskError> {
 
 // 2. Tests the '?' Tuple Repackaging fix
 spell read_disk(own sigil* Disk:Idle d, mark16 target_sector) -> (sigil* Disk, scroll | ruin<DiskError>) {
+    
+    // THE FIX: Provide the destined guarantee for safe ? unpacking!
+    destined {
+        // Empty in this test, but it signals the CodeGen to construct
+        // the safe LIFO __ret slot so the hardware pointer isn't dropped.
+    }
+
     d = Disk:Busy;
     
     // If check_sector fails, the '?' operator must intercept the ruin, 

@@ -1152,8 +1152,24 @@ void SemanticAnalyzer::visit(PostfixExpr* node) {
         error(node->op,
               "The '?' operator propagates ruins, but the enclosing spell '" +
               currentSpell->name.lexeme + "' does not return an Omen. "
-              "You can only use '?' inside a spell that returns 'T | ruin<E>'. "
-              "To handle ruins inside an abyss spell, use 'divine'.");
+              "You can only use '?' inside a spell that returns 'T | ruin<E>'.");
+    }
+
+    // THE FIX (BUG 1): Enforce Destined Block for Ownership Tuples
+    // Dynamically scan the spell body to see if a destined block exists.
+    if (currentSpell && currentSpell->returnTypes.size() > 1) {
+        bool hasDestined = false;
+        for (const auto& stmt : currentSpell->body) {
+            if (dynamic_cast<DestinedStmt*>(stmt.get())) {
+                hasDestined = true;
+                break;
+            }
+        }
+        if (!hasDestined) {
+            error(node->op, 
+                  "Spells returning ownership tuples must use a 'destined' block when "
+                  "using '?' to ensure safe hardware pointer cleanup before early return.");
+        }
     }
 
     // RESOLVEDOMENTYPE PATCH:
@@ -1418,24 +1434,21 @@ void SemanticAnalyzer::visit(CallExpr* node) {
         // Multi-element tuple return.
         auto tupleType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::TUPLE, "Tuple"});
 
-        // Populate tupleElements so downstream validators can inspect them.
-        // Without this, visit(DivineStmt) cannot verify __elem1 is actually an Omen.
         for (const auto& rt : spell->returnTypes) {
             auto elemIt = typeRegistry.find(rt.typeToken.lexeme);
             if (elemIt != typeRegistry.end()) {
                 tupleType->tupleElements.push_back(elemIt->second);
             } else {
-                // Unknown element type — push a placeholder so indexing is safe.
                 tupleType->tupleElements.push_back(
                     std::make_shared<TypeInfo>(TypeInfo{TypeKind::PRIMITIVE, rt.typeToken.lexeme})
                 );
             }
         }
 
-        // If the spell has an Omen suffix, replace the last element type with
-        // an OMEN TypeInfo (the omen applies to the last listed return type).
         if (spell->hasOmen && !tupleType->tupleElements.empty()) {
             auto omenType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::OMEN, "Omen"});
+            // THE FIX (BUG 4): Propagate the success type into the Omen!
+            omenType->successType = tupleType->tupleElements.back();
             tupleType->tupleElements.back() = omenType;
         }
 
@@ -1443,14 +1456,22 @@ void SemanticAnalyzer::visit(CallExpr* node) {
 
     } else if (spell->hasOmen) {
         // Single-element Omen: scroll | ruin<E>
-        currentExprType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::OMEN, "Omen"});
+        auto omenType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::OMEN, "Omen"});
+        
+        // THE FIX (BUG 4): Extract actual success type to prevent soul16/auto fallback
+        if (!spell->returnTypes.empty()) {
+            auto retIt = typeRegistry.find(spell->returnTypes[0].typeToken.lexeme);
+            if (retIt != typeRegistry.end()) {
+                omenType->successType = retIt->second;
+            } else {
+                omenType->successType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::PRIMITIVE, spell->returnTypes[0].typeToken.lexeme});
+            }
+        }
+        currentExprType = omenType;
 
     } else if (!spell->returnTypes.empty()) {
         auto retIt = typeRegistry.find(spell->returnTypes[0].typeToken.lexeme);
-        currentExprType = (retIt != typeRegistry.end())
-            ? retIt->second
-            : typeRegistry["abyss"];
-
+        currentExprType = (retIt != typeRegistry.end()) ? retIt->second : typeRegistry["abyss"];
     } else {
         currentExprType = typeRegistry["abyss"];
     }

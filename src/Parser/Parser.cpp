@@ -407,6 +407,20 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         return parseVarDeclStmt(typeToken);
     }
     
+    // THE FIX (BUG 3): Lookahead for: Device* ptr = ...;
+    if (check(TokenType::IDENT) &&
+        peekNext().type == TokenType::STAR &&
+        (current + 2 < (int)tokens.size()) &&
+        tokens[current + 2].type == TokenType::IDENT &&
+        (current + 3 < (int)tokens.size()) &&
+        (tokens[current + 3].type == TokenType::ASSIGN || 
+         tokens[current + 3].type == TokenType::SEMICOLON)) {
+        
+        Token typeToken = advance(); // Consume type name
+        advance();                   // Consume '*'
+        return parseVarDeclStmt(typeToken, true);
+    }
+    
     if (match({TokenType::IF}))       return parseIfStmt();
     if (match({TokenType::FORE}))     return parseForeStmt();
     if (match({TokenType::WHIRL}))    return parseWhirlStmt();

@@ -1108,6 +1108,10 @@ void CodeGenVisitor::visit(VarDeclStmt* node) {
             node->initializer->accept(*this);
         }
         emit(";\n");
+
+        // THE FIX (BUG 2): Register local sigil pointers so AssignStmt emits ->__stance
+        stancePointerVars.insert(node->name.lexeme);
+
     } else {
         // Scalar declaration: mark16 x = 5;
         // Emits: int16_t x = 5;
