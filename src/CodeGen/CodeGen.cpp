@@ -218,16 +218,10 @@ void CodeGenVisitor::visit(SigilDecl* node) {
 // these nodes and apply the Structure of Arrays layout transformation.
 void CodeGenVisitor::visit(LegionDecl* node) {
     if (currentPhase != Phase::TYPES) return;
-
-    emitLine("// legion " + node->name.lexeme + " (V1 stub: emitted as struct)");
-    emitLine("typedef struct {");
-    indentLevel++;
-    for (const auto& field : node->fields) {
-        emitLine(getCType(field.type) + " " + field.name.lexeme + ";");
-    }
-    indentLevel--;
-    emitLine("} " + node->name.lexeme + ";");
-    emitLine("");
+    
+    // Do NOT emit a C struct. Register it so VarDeclStmt can split its fields later.
+    legionRegistry[node->name.lexeme] = node;
+    emitLine("// legion " + node->name.lexeme + " (Registered for SoA expansion)");
 }
 
 // leyline disk_status_port: rune @ 0x1F7;
@@ -1096,17 +1090,27 @@ void CodeGenVisitor::visit(VarDeclStmt* node) {
     std::string cType = getCType(node->typeToken);
 
     if (node->isArray) {
-        // Array declaration: deck[80] rune buf;
-        // Emits: uint8_t buf[80];
-        // GNU compound-literal initializer for arrays: uint8_t buf[80] = {0};
-        indent();
-        emit(cType + " " + node->name.lexeme +
-             "[" + node->arraySizeToken.lexeme + "]");
-        if (node->initializer) {
-            emit(" = ");
-            node->initializer->accept(*this);
+        // Is this an array of a legion?
+        if (legionRegistry.count(node->typeToken.lexeme)) {
+            indent();
+            emitLine("/* SoA Expansion for legion: " + node->name.lexeme + " */");
+            legionArrayVars.insert(node->name.lexeme); // Track for DOT interception
+            
+            LegionDecl* legion = legionRegistry[node->typeToken.lexeme];
+            for (const auto& field : legion->fields) {
+                emitLine(getCType(field.type) + " " + node->name.lexeme + "_" + field.name.lexeme +
+                         "[" + node->arraySizeToken.lexeme + "];");
+            }
+        } else {
+            // Normal array declaration
+            indent();
+            emit(cType + " " + node->name.lexeme + "[" + node->arraySizeToken.lexeme + "]");
+            if (node->initializer) {
+                emit(" = ");
+                node->initializer->accept(*this);
+            }
+            emit(";\n");
         }
-        emit(";\n");
     } else if (node->isPointer) {
         // Pointer declaration: mark16* px = &x;   sigil* Device ptr = &dev;
         // Emits: int16_t* px = &x;   Device* ptr = &dev;
@@ -1263,6 +1267,26 @@ void CodeGenVisitor::visit(BinaryExpr* node) {
         return;
     }
 
+    // --- SoA INTERCEPTOR ---
+    // MUST happen before ANY parenthesis or left-side emission!
+    if (node->op.type == TokenType::DOT) {
+        if (auto* idx = dynamic_cast<IndexExpr*>(node->left.get())) {
+            if (auto* targetIdent = dynamic_cast<IdentifierExpr*>(idx->target.get())) {
+                if (legionArrayVars.count(targetIdent->token.lexeme)) {
+                    auto* field = dynamic_cast<IdentifierExpr*>(node->right.get());
+                    if (field) {
+                        // Emit ONLY: arrayName_fieldName[index]
+                        emit(targetIdent->token.lexeme + "_" + field->token.lexeme + "[");
+                        idx->index->accept(*this);
+                        emit("]");
+                        return; // Stop standard emission completely!
+                    }
+                }
+            }
+        }
+    }
+    // --- END SoA INTERCEPTOR ---
+
     emit("(");
     node->left->accept(*this);
 
@@ -1270,7 +1294,7 @@ void CodeGenVisitor::visit(BinaryExpr* node) {
         emit(node->op.lexeme); // -> or .
         
         auto* rightIdent = dynamic_cast<IdentifierExpr*>(node->right.get());
-        // THE FIX: Intercept "stance" and map it to the C struct's "__stance"
+        // Intercept "stance" and map it to the C struct's "__stance"
         if (rightIdent && rightIdent->token.lexeme == "stance") {
             emit("__stance"); 
         } else {
@@ -1529,4 +1553,12 @@ void CodeGenVisitor::visit(CastExpr* node) {
     emit("((" + cType + ")(");
     node->operand->accept(*this);
     emit("))");
+}
+
+void CodeGenVisitor::visit(UpdateExpr* node) {
+    if (currentPhase != Phase::IMPLEMENTATIONS) return;
+
+    if (node->isPrefix) emit(node->op.lexeme);  // e.g., "++"
+    node->operand->accept(*this);               // e.g., "i"
+    if (!node->isPrefix) emit(node->op.lexeme); // e.g., "++" (if postfix)
 }

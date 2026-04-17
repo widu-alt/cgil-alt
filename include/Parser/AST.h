@@ -87,6 +87,7 @@ struct IndexExpr;
 struct StructInitExpr;
 struct AssignExpr;
 struct CastExpr;
+struct UpdateExpr;
 
 // =============================================================================
 // THE VISITOR INTERFACE
@@ -136,6 +137,7 @@ public:
     virtual void visit(StructInitExpr* node) = 0;
     virtual void visit(AssignExpr*     node) = 0;
     virtual void visit(CastExpr*       node) = 0;
+    virtual void visit(UpdateExpr*     node) = 0;
 };
 
 // =============================================================================
@@ -751,6 +753,19 @@ struct CastExpr : public Expr {
     CastExpr(Token targetTok, std::unique_ptr<Expr> op)
         : targetType(targetTok), operand(std::move(op)) {
         token = targetTok;
+    }
+    void accept(ASTVisitor& visitor) override { visitor.visit(this); }
+};
+
+// Prefix or Postfix update: ++i, i++, --val, val--
+struct UpdateExpr : public Expr {
+    std::unique_ptr<Expr> operand;
+    Token                 op;        // PLUS_PLUS or MINUS_MINUS
+    bool                  isPrefix;  // true for ++i, false for i++
+
+    UpdateExpr(std::unique_ptr<Expr> operand, Token op, bool isPrefix)
+        : operand(std::move(operand)), op(op), isPrefix(isPrefix) {
+        token = op;
     }
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };

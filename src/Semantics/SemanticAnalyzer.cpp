@@ -3,6 +3,39 @@
 #include <set>        // For std::set (Fix 2)
 #include <typeinfo>   // For typeid (Supplementary Fix)
 
+// Returns true if valueType can be assigned to targetType without a cast.
+// Cgil assignment compatibility rules:
+//   - Same type: always OK
+//   - Numeric primitives: OK (mark16, mark32, soul16, soul32, addr, rune inter-assign)
+//   - SIGIL to SIGIL: must be the exact same named sigil
+//   - LEGION to LEGION: must be the exact same named legion
+//   - Everything else: ERROR
+static bool isAssignmentCompatible(
+    const std::shared_ptr<TypeInfo>& target,
+    const std::shared_ptr<TypeInfo>& value)
+{
+    if (!target || !value) return true; // Fallback if unresolved
+
+    // 1. Exact match (handles identical sigils, legions, ranks, and primitives)
+    if (target->kind == value->kind && target->name == value->name) return true;
+
+    // 2. Numeric Primitive Inter-assignment (C handles the widening/truncation)
+    if (target->kind == TypeKind::PRIMITIVE && value->kind == TypeKind::PRIMITIVE) {
+        // 'abyss' (void) is never assignable
+        if (target->name == "abyss" || value->name == "abyss") return false;
+        
+        // 'scroll' (fat pointer) cannot be implicitly assigned to/from a number
+        if (target->name == "scroll" || value->name == "scroll") return false;
+        
+        // 'oath' (boolean) is strict
+        if (target->name == "oath" && value->name != "rune") return false;
+        
+        return true; // Other primitives (mark16, soul32, addr, rune) can mix
+    }
+
+    return false;
+}
+
 // =============================================================================
 // PRIVATE HELPERS
 // =============================================================================
@@ -65,10 +98,12 @@ std::shared_ptr<TypeInfo> SemanticAnalyzer::resolveType(Token nameToken) {
 // Pass 1: Nothing to register. Includes are resolved at the C level.
 // Pass 2: In a full implementation, pact in kernel context would warn here.
 void SemanticAnalyzer::visit(GrimoireDecl* node) {
-    // V1: No action required in either pass.
-    // V1.5 TODO: Warn if node->isPact is true and we are in kernel context
-    // (i.e., not inside a spell marked with pact-safe modifier).
-    (void)node;
+    // Warn if pact is used in a bare-metal context
+    if (isPassOne && node->isPact) {
+        std::cerr << "[Semantic Warning Line " << node->token.line << "] "
+                  << "pact imports assume a hosted OS environment and are unsafe for Ring 0 wardens. "
+                  << "Ensure this file is not compiled into a bare-metal kernel.\n";
+    }
 }
 
 // rank DiskError { Timeout, HardwareFault, InvalidSector }
@@ -167,9 +202,8 @@ void SemanticAnalyzer::visit(LegionDecl* node) {
         if (typeRegistry.count(node->name.lexeme)) {
             error(node->name, "Type '" + node->name.lexeme + "' is already declared.");
         }
-        // V1: Treated as SIGIL. V2 will use a LEGION TypeKind for SoA transforms.
         typeRegistry[node->name.lexeme] = std::make_shared<TypeInfo>(
-            TypeInfo{TypeKind::SIGIL, node->name.lexeme}
+            TypeInfo{TypeKind::LEGION, node->name.lexeme}
         );
         return;
     }
@@ -337,19 +371,36 @@ void SemanticAnalyzer::visit(YieldStmt* node) {
         error(node->token, "'yield' used outside of a spell body.");
     }
 
-    // Warden spells must yield nothing (they are ISRs — they return to hardware).
     if (currentSpell->isWarden && !node->values.empty()) {
         error(node->token, "'warden spell' must yield 'abyss'. ISRs cannot return values.");
     }
 
-    // Evaluate each yielded expression to type-check it and detect ownership moves.
-    for (auto& val : node->values) {
-        evaluate(val.get());
+    // THE FIX: Strict Yield Compatibility Checking
+    for (size_t i = 0; i < node->values.size(); i++) {
+        auto valType = evaluate(node->values[i].get());
+        
+        std::shared_ptr<TypeInfo> expectedType = nullptr;
+        
+        if (currentSpell->returnTypes.size() > 1) {
+            if (i < currentSpell->returnTypes.size()) {
+                expectedType = resolveType(currentSpell->returnTypes[i].typeToken);
+            }
+        } else if (currentSpell->returnTypes.size() == 1) {
+            expectedType = resolveType(currentSpell->returnTypes[0].typeToken);
+        }
+        
+        if (expectedType) {
+            // Omen ruin(...) construction returns an OMEN type, which is valid if the spell expects an Omen
+            if (currentSpell->hasOmen && valType->kind == TypeKind::OMEN && i == currentSpell->returnTypes.size() - 1) {
+                continue; 
+            }
+            if (!isAssignmentCompatible(expectedType, valType)) {
+                error(node->values[i]->token, 
+                      "Type mismatch in yield: cannot implicitly assign '" +
+                      (valType ? valType->name : "?") + "' to expected return type '" + expectedType->name + "'.");
+            }
+        }
     }
-
-    // V1.5 TODO: Check that yielded types match the spell's declared return type.
-    // For now, the arity check (right number of values for tuple vs single return)
-    // is the primary enforcement.
 }
 
 // shatter; — break out of the innermost loop.
@@ -378,16 +429,18 @@ void SemanticAnalyzer::visit(IfStmt* node) {
 
     // Evaluate and check the if condition.
     auto condType = evaluate(node->condition.get());
-    // V1: We accept any type for boolean conditions (like C does).
-    // V1.5 TODO: Enforce that condition is 'oath' or a comparable primitive.
-    (void)condType;
+    if (!isAssignmentCompatible(typeRegistry["oath"], condType)) {
+        error(node->condition->token, "Condition must evaluate to an 'oath' (boolean) type.");
+    }
 
     // Visit each branch. BlockStmt::accept() handles scope for each.
     node->thenBranch->accept(*this);
 
     for (auto& elifBranch : node->elifBranches) {
         auto elifCondType = evaluate(elifBranch.condition.get());
-        (void)elifCondType;
+        if (!isAssignmentCompatible(typeRegistry["oath"], elifCondType)) {
+            error(elifBranch.condition->token, "Condition must evaluate to an 'oath' (boolean) type.");
+        }
         elifBranch.body->accept(*this);
     }
 
@@ -427,15 +480,16 @@ void SemanticAnalyzer::visit(ForeStmt* node) {
     loopDepth--;
 
     if (node->increment) {
-    // Warn if increment is not an assignment — this is almost certainly a bug
-    if (!dynamic_cast<AssignExpr*>(node->increment.get())) {
-        std::cerr << "[Semantic Warning Line " << node->token.line << "] "
-                  << "Loop increment is not an assignment expression. "
-                  << "The loop variable '" << node->initVar.lexeme 
-                  << "' may never be modified, causing an infinite loop.\n";
+        // Allow AssignExpr (i = i + 1) AND UpdateExpr (i++)
+        if (!dynamic_cast<AssignExpr*>(node->increment.get()) &&
+            !dynamic_cast<UpdateExpr*>(node->increment.get())) {
+            std::cerr << "[Semantic Warning Line " << node->token.line << "] "
+                      << "Loop increment is not an assignment or update expression. "
+                      << "The loop variable '" << node->initVar.lexeme 
+                      << "' may never be modified, causing an infinite loop.\n";
+        }
+        evaluate(node->increment.get());
     }
-    evaluate(node->increment.get());
-}
 
     symbols.exitScope(); // Loop variable goes out of scope
 }
@@ -446,7 +500,9 @@ void SemanticAnalyzer::visit(WhirlStmt* node) {
     if (isPassOne) return;
 
     auto condType = evaluate(node->condition.get());
-    (void)condType; // V1.5 TODO: enforce oath
+    if (!isAssignmentCompatible(typeRegistry["oath"], condType)) {
+        error(node->condition->token, "Condition must evaluate to an 'oath' (boolean) type.");
+    }
 
     loopDepth++;
     node->body->accept(*this);
@@ -478,7 +534,9 @@ void SemanticAnalyzer::visit(DestinedStmt* node) {
     // Evaluate the optional condition.
     if (node->hasCondition) {
         auto condType = evaluate(node->condition.get());
-        (void)condType; // V1.5 TODO: enforce boolean-like
+        if (!isAssignmentCompatible(typeRegistry["oath"], condType)) {
+            error(node->condition->token, "Destined condition must evaluate to an 'oath' (boolean) type.");
+        }
     }
 
     // Visit the cleanup body. Note: NOT entering a new scope here.
@@ -820,18 +878,32 @@ void SemanticAnalyzer::visit(AssignStmt* node) {
             return; // Stance transition complete — no further type checking needed.
         }
 
-        // Standard assignment: type-check V1 (structural match not required for V1).
-        // V1.5 TODO: check right type is assignment-compatible with left type.
+        // Left side is not a plain identifier (e.g., ctrl->field = value).
+        auto targetType = evaluate(node->target.get()); // Validates lvalue
+        auto valueType  = evaluate(node->value.get());  // Validates rvalue
+
+        // --- Strict Assignment Check ---
+        if (!isAssignmentCompatible(sym->type, valueType)) {
+            error(node->token,
+                  "Type mismatch: cannot implicitly assign '" +
+                  (valueType ? valueType->name : "?") + "' to '" +
+                  (sym->type ? sym->type->name : "?") + "'. " +
+                  "Use 'cast<" + sym->type->name + ">(expr)' for explicit conversion.");
+        }
         return;
     }
 
     // Left side is not a plain identifier (e.g., ctrl->field = value).
-    // Evaluate both sides for side effects and ownership tracking.
-    evaluate(node->target.get()); // Validates lvalue expression
-    evaluate(node->value.get());  // Validates rvalue expression and type
+    auto targetType = evaluate(node->target.get()); // Validates lvalue
+    auto valueType  = evaluate(node->value.get());  // Validates rvalue
 
-    // V1.5 TODO: Validate that the target is a valid lvalue.
-    // V1.5 TODO: Validate direct writes to __stance are a compile error.
+    // --- Strict Assignment Check ---
+    if (!isAssignmentCompatible(targetType, valueType)) {
+        error(node->token,
+              "Type mismatch: cannot implicitly assign '" +
+              (valueType ? valueType->name : "?") + "' to '" +
+              (targetType ? targetType->name : "?") + "'.");
+    }
 }
 
 // =============================================================================
@@ -1092,11 +1164,14 @@ void SemanticAnalyzer::visit(UnaryExpr* node) {
     auto operandType = evaluate(node->operand.get());
 
     if (node->op.type == TokenType::STAR) {
-        // Pointer dereference *ptr
-        // V1.5 TODO: Validate operand is a pointer type, return pointee type.
-        currentExprType = operandType; // Simplified
+        // THE FIX: Unwrap pointer type
+        if (operandType && operandType->elementType) {
+            currentExprType = operandType->elementType;
+        } else {
+            // Fallback if the AST node wasn't explicitly wrapped (e.g. from a raw parameter)
+            currentExprType = operandType; 
+        }
     } else {
-        // Negation or other prefix op — same type as operand.
         currentExprType = operandType;
     }
 }
@@ -1261,8 +1336,22 @@ void SemanticAnalyzer::visit(IdentifierExpr* node) {
                   "'" + node->token.lexeme + "' is not a known rank type. "
                   "Variant access (::) requires a declared rank name.");
         }
-        // V1.5 TODO: Validate node->variantName.lexeme is in the rank's variants.
-        // Rank variants are soul16 discriminants at runtime.
+        
+        // Validate node->variantName.lexeme is actually in the rank's variants
+        const auto& variants = rankVariants[node->token.lexeme];
+        bool variantExists = false;
+        for (const auto& v : variants) {
+            if (v == node->variantName.lexeme) {
+                variantExists = true;
+                break;
+            }
+        }
+        
+        if (!variantExists) {
+            error(node->variantName, 
+                  "Rank '" + node->token.lexeme + "' has no variant named '" + node->variantName.lexeme + "'.");
+        }
+
         currentExprType = typeRegistry["soul16"];
         return;
     }
@@ -1504,8 +1593,10 @@ void SemanticAnalyzer::visit(AddressOfExpr* node) {
     }
 
     // Regular address-of: &my_disk -> pointer to the variable.
-    // V1: Return the operand's type. V1.5: wrap in a pointer TypeInfo.
-    currentExprType = operandType;
+    // THE FIX: Wrap the operand's type in a pointer TypeInfo
+    auto ptrType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::PRIMITIVE, operandType->name + "*"});
+    ptrType->elementType = operandType; // Store the pointee type for unwrapping
+    currentExprType = ptrType;
 }
 
 // Array subscript: target[index]
@@ -1546,7 +1637,6 @@ void SemanticAnalyzer::visit(IndexExpr* node) {
 void SemanticAnalyzer::visit(StructInitExpr* node) {
     if (isPassOne) return;
 
-    // 1. Resolve the type name.
     auto typeIt = typeRegistry.find(node->typeName.lexeme);
     if (typeIt == typeRegistry.end()) {
         error(node->typeName,
@@ -1556,26 +1646,31 @@ void SemanticAnalyzer::visit(StructInitExpr* node) {
 
     auto sigilType = typeIt->second;
 
-    if (sigilType->kind != TypeKind::SIGIL) {
+    if (sigilType->kind != TypeKind::SIGIL && sigilType->kind != TypeKind::LEGION) {
         error(node->typeName,
               "'" + node->typeName.lexeme + "' is not a sigil or legion type. "
               "Struct initializer { } syntax is only valid for sigil and legion types.");
     }
 
-    // 2. Validate stance prefix if present.
-    if (!node->stanceName.lexeme.empty()) {
-        // V1: We trust the stance name is valid (Parser consumed it as an IDENT).
-        // V1.5 TODO: Look up the stanceMap for this sigil and verify the stance exists.
-    }
-
-    // 3. Evaluate all field initializer expressions.
-    // V1: We don't validate field names against the sigil definition (V1.5 TODO).
-    // We do evaluate initializers to catch type errors and ownership moves inside them.
+    // Evaluate all field initializer expressions and validate them against the struct definition.
     for (auto& field : node->fields) {
-        evaluate(field.value.get());
+        auto valueType = evaluate(field.value.get());
+        
+        // Validate the field actually exists in the sigil/legion
+        if (sigilType->fields.find(field.name.lexeme) == sigilType->fields.end()) {
+            error(field.name, "Struct '" + sigilType->name + "' has no field named '" + field.name.lexeme + "'.");
+        } else {
+            // Enforce strict assignment compatibility for the field value
+            auto expectedType = sigilType->fields[field.name.lexeme];
+            if (!isAssignmentCompatible(expectedType, valueType)) {
+                error(field.value->token, 
+                      "Type mismatch in struct initialization: cannot assign '" + 
+                      (valueType ? valueType->name : "?") + "' to field '" + field.name.lexeme + 
+                      "' of type '" + expectedType->name + "'.");
+            }
+        }
     }
 
-    // The expression type is the sigil type itself.
     currentExprType = sigilType;
 }
 
@@ -1596,7 +1691,15 @@ void SemanticAnalyzer::visit(AssignExpr* node) {
 
     auto targetType = evaluate(node->target.get());
     auto valueType  = evaluate(node->value.get());
-    (void)valueType; // V1.5 TODO: strict type compatibility check
+    
+    // --- THE FIX: Strict Assignment Check ---
+    if (!isAssignmentCompatible(targetType, valueType)) {
+        error(node->op,
+              "Type mismatch in expression: cannot implicitly assign '" +
+              (valueType ? valueType->name : "?") + "' to '" +
+              (targetType ? targetType->name : "?") + "'.");
+    }
+    
     currentExprType = targetType;
 }
 
@@ -1617,4 +1720,16 @@ void SemanticAnalyzer::visit(CastExpr* node) {
     }
 
     currentExprType = targetType;
+}
+
+void SemanticAnalyzer::visit(UpdateExpr* node) {
+    if (isPassOne) return;
+
+    // You cannot do ++5 or (a + b)++. The operand must be a valid memory location.
+    if (!isLvalue(node->operand.get())) {
+        error(node->token, "Invalid operand for '" + node->op.lexeme + "'. Must be a variable, array element, or member field.");
+    }
+
+    // Return the type of the operand (e.g., mark16)
+    currentExprType = evaluate(node->operand.get());
 }

@@ -19,8 +19,8 @@ enum class TokenType {
 
     // Operators
     ARROW, FAT_ARROW, DOT, STAR, SLASH, PLUS, MINUS,
-    EQ, NEQ, GT, LT, WEAVE, REV_WEAVE, ASSIGN,
-    PIPE, QUESTION, AMP, SCOPE,
+    PLUS_PLUS, MINUS_MINUS, EQ, NEQ, GT, LT, WEAVE,
+    REV_WEAVE, ASSIGN, PIPE, QUESTION, AMP, SCOPE,
 
     // Literals & Identifiers
     IDENT, INT_LIT, STRING_LIT,

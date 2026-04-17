@@ -918,6 +918,12 @@ std::unique_ptr<Expr> Parser::parsePrecedence(int minPrecedence) {
             break;
         }
 
+        // Prefix increment/decrement: ++i, --val
+        case TokenType::PLUS_PLUS:
+        case TokenType::MINUS_MINUS:
+            left = std::make_unique<UpdateExpr>(parsePrecedence(90), tok, true);
+            break;
+
         default:
             error(tok, "Expected an expression.");
     }
@@ -956,6 +962,11 @@ std::unique_ptr<Expr> Parser::parsePrecedence(int minPrecedence) {
             }
             auto memberExpr = std::make_unique<IdentifierExpr>(member);
             left = std::make_unique<BinaryExpr>(std::move(left), op, std::move(memberExpr));
+            
+        } else if (op.type == TokenType::PLUS_PLUS || op.type == TokenType::MINUS_MINUS) {
+            // Postfix increment/decrement: i++, val--
+            // These operators do not consume a right-hand expression!
+            left = std::make_unique<UpdateExpr>(std::move(left), op, false);
 
         } else {
             auto right = parsePrecedence(prec + 1);
@@ -1056,6 +1067,8 @@ std::unique_ptr<StructInitExpr> Parser::parseStructInitExpr(Token typeName, Toke
 //   | (Omen Union)           1
 int Parser::getPrecedence(TokenType type) const {
     switch (type) {
+        case TokenType::PLUS_PLUS:
+        case TokenType::MINUS_MINUS: return 110;
         case TokenType::LBRACKET:  return 100;
         case TokenType::QUESTION:
         case TokenType::LPAREN:    return 90;

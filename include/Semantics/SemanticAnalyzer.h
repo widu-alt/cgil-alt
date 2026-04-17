@@ -120,6 +120,7 @@ public:
     void visit(StructInitExpr* node) override;
     void visit(AssignExpr*     node) override;
     void visit(CastExpr*       node) override;
+    void visit(UpdateExpr*     node) override;
 
 private:
     // =========================================================================

@@ -1,0 +1,91 @@
+// =============================================================================
+// CGIL ISOLATED TEST 11: The Legion Architecture (Structure of Arrays)
+// =============================================================================
+
+pact <stdio.h>;
+conjure spell putchar(mark32 c) -> mark32;
+
+// --- Helper Spells ---
+spell print(scroll msg) -> abyss {
+    fore (mark16 i = 0; i < msg.len; i++) {
+        putchar(cast<mark32>(msg.ptr[i]));
+    }
+}
+
+spell print_num(mark16 val) -> abyss {
+    if (val == 0) {
+        putchar(48);
+        yield;
+    }
+    mark16 divisor = 10000;
+    oath started = forsaken;
+
+    whirl (divisor > 0) {
+        mark16 digit = val / divisor;
+        if (digit > 0 || started == kept) {
+            putchar(cast<mark32>(digit + 48));
+            started = kept;
+            val = val % divisor;
+        }
+        divisor = divisor / 10;
+    }
+}
+
+// --- The Legion Definition ---
+// Signals to the compiler: "Do not emit a struct. Emit parallel arrays."
+legion Particle {
+    mark16 pos_x;
+    mark16 pos_y;
+    mark16 velocity;
+}
+
+// --- The Physics System ---
+spell main() -> mark16 {
+    print("\n[SYSTEM] Initializing Particle Swarm (Legion SoA)...\n\n");
+
+    // The Illusion: Looks like an array of structs to the programmer.
+    // The Reality: CodeGen will split this into 3 separate uint16_t arrays.
+    deck[5] Particle swarm;
+
+    // 1. Initialize the swarm
+    fore (mark16 i = 0; i < 5; i++) {
+        swarm[i].pos_x = i * 10;
+        swarm[i].pos_y = i * 20;
+        swarm[i].velocity = 100 - (i * 5);
+    }
+
+    // 2. Simulate 1 tick of movement & print verbose output
+    mark16 checksum = 0;
+
+    fore (mark16 i = 0; i < 5; i++) {
+        // Apply velocity to positions
+        swarm[i].pos_x = swarm[i].pos_x + swarm[i].velocity;
+        swarm[i].pos_y = swarm[i].pos_y + swarm[i].velocity;
+
+        print("Particle "); print_num(i);
+        print(" | X: "); print_num(swarm[i].pos_x);
+        print(" | Y: "); print_num(swarm[i].pos_y);
+        print(" | V: "); print_num(swarm[i].velocity);
+        print("\n");
+
+        checksum = checksum + swarm[i].pos_x;
+    }
+
+    print("\nFinal X-Position Checksum: "); print_num(checksum); print("\n");
+
+    // Expected Checksum:
+    // P0_X = 0 + 100 = 100
+    // P1_X = 10 + 95 = 105
+    // P2_X = 20 + 90 = 110
+    // P3_X = 30 + 85 = 115
+    // P4_X = 40 + 80 = 120
+    // Sum = 100 + 105 + 110 + 115 + 120 = 550
+
+    if (checksum == 550) {
+        print("\nTEST 11: Legion Structure of Arrays ... OK\n\n");
+    } else {
+        print("\n-> FAIL: Legion SoA memory corruption detected.\n\n");
+    }
+
+    yield 0;
+}

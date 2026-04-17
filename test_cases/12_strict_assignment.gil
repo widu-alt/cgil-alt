@@ -1,0 +1,21 @@
+// =============================================================================
+// CGIL ISOLATED TEST 12: Strict Assignment Constraints
+// =============================================================================
+
+sigil Packet {
+    mark16 id;
+}
+
+sigil Device {
+    mark16 id;
+}
+
+spell main() -> mark16 {
+    sigil Packet p = Packet { id: 1 };
+    sigil Device d = Device { id: 2 };
+
+    // ILLEGAL: Assigning one sigil type to another
+    p = d;
+
+    yield 0;
+}

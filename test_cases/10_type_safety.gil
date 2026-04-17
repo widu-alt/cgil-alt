@@ -8,7 +8,7 @@ conjure spell putchar(mark32 c) -> mark32;
 // --- 1. Testing Scroll Field Safety & Explicit Casting ---
 spell print(scroll msg) -> abyss {
     // The SA now natively knows about .len and .ptr!
-    fore (mark16 i = 0; i < msg.len; i = i + 1) {
+    fore (mark16 i = 0; i < msg.len; i++) {
         // Testing the new cast<Target>(val) syntax
         putchar(cast<mark32>(msg.ptr[i]));
     }

@@ -73,7 +73,6 @@ void Lexer::scanToken() {
         case ',': addToken(TokenType::COMMA); break;
         case '.': addToken(TokenType::DOT); break;
         case '*': addToken(TokenType::STAR); break;
-        case '+': addToken(TokenType::PLUS); break;
         case '?': addToken(TokenType::QUESTION); break;
         case '@': addToken(TokenType::AT); break;
         case '^': addToken(TokenType::CARET); break;   // P1 FIX: Bitwise XOR
@@ -117,8 +116,11 @@ void Lexer::scanToken() {
             else addToken(TokenType::GT);
             break;
 
+        case '+': addToken(match('+') ? TokenType::PLUS_PLUS : TokenType::PLUS); break;
         case '-': 
-            addToken(match('>') ? TokenType::ARROW : TokenType::MINUS); 
+            if (match('-')) addToken(TokenType::MINUS_MINUS);
+            else if (match('>')) addToken(TokenType::ARROW);
+            else addToken(TokenType::MINUS); 
             break;
 
         case '/':

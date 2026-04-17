@@ -125,6 +125,7 @@ public:
     void visit(StructInitExpr* node) override;
     void visit(AssignExpr*     node) override;
     void visit(CastExpr*       node) override;
+    void visit(UpdateExpr*     node) override;
 
 private:
     // =========================================================================
@@ -146,6 +147,12 @@ private:
     // Maps Cgil primitive type names to C99 type strings.
     // User-defined types (sigil/rank/legion names) fall through to the raw name.
     std::unordered_map<std::string, std::string> cTypeMap;
+
+    // Tracks legion declarations so we can look up their fields for SoA expansion
+    std::unordered_map<std::string, LegionDecl*> legionRegistry;
+
+    // Tracks variables that are deck arrays of a legion type (e.g., "entities")
+    std::unordered_set<std::string> legionArrayVars;
 
     void setupTypeMap() {
         cTypeMap["mark16"] = "int16_t";

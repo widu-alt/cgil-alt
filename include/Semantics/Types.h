@@ -47,6 +47,9 @@ enum class TypeKind {
     // CodeGen: emits a C struct with uint16_t __stance as the first field.
     SIGIL,
 
+    // Structure of Arrays (SoA)
+    LEGION,
+
     // User-defined enum with sequential uint16_t discriminants.
     // rank DiskError { Timeout, HardwareFault, InvalidSector }
     // CodeGen: emits typedef uint16_t + #define constants.
