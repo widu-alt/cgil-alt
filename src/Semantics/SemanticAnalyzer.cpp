@@ -17,7 +17,11 @@ static bool isAssignmentCompatible(
     if (!target || !value) return true; // Fallback if unresolved
 
     // 1. Exact match (handles identical sigils, legions, ranks, and primitives)
-    if (target->kind == value->kind && target->name == value->name) return true;
+    if (target->kind == value->kind && target->name == value->name) {
+        // Reject direct array-to-array assignments
+        if (target->name.rfind("__array_", 0) == 0) return false; 
+        return true;
+    }
 
     // 2. Numeric Primitive Inter-assignment (C handles the widening/truncation)
     if (target->kind == TypeKind::PRIMITIVE && value->kind == TypeKind::PRIMITIVE) {
@@ -209,8 +213,12 @@ void SemanticAnalyzer::visit(LegionDecl* node) {
     }
 
     // Pass 2: Validate field types.
+    auto& legionTypeInfo = typeRegistry.at(node->name.lexeme);
     for (auto& field : node->fields) {
-        resolveType(field.type);
+        warnIfFlow(field.type); // P1-2 FIX
+        auto fieldType = resolveType(field.type);
+        // THE FIX: Populate the field map so DOT access knows the type
+        legionTypeInfo->fields[field.name.lexeme] = fieldType; 
     }
 }
 
@@ -249,8 +257,15 @@ void SemanticAnalyzer::visit(SpellDecl* node) {
     SpellDecl* previousSpell = currentSpell;
     currentSpell = node;
 
+    // P1-1 FIX: RAII guard guarantees scope exit even if an exception is thrown
+    struct ScopeGuard {
+        SymbolTable& sym;
+        ~ScopeGuard() { sym.exitScope(); }
+    };
+
     // Enter the spell's scope. Parameters live here.
     symbols.enterScope();
+    ScopeGuard guard{symbols};
 
     // Declare all parameters as symbols. Also check each for FPU type.
     for (auto& param : node->params) {
@@ -276,7 +291,6 @@ void SemanticAnalyzer::visit(SpellDecl* node) {
     }
 
     // Clean up.
-    symbols.exitScope();
     currentSpell = previousSpell;
 }
 
@@ -567,14 +581,11 @@ void SemanticAnalyzer::visit(DestinedStmt* node) {
                 dynamic_cast<SurgeStmt*>(stmt.get())) {
                 error(stmt->token,
                       "Control flow jumps ('yield', 'shatter', 'surge') are illegal "
-                      "inside a 'destined' block. The destined block executes AFTER "
-                      "loop bounds and returns are evaluated. Placing jumps here produces invalid C.");
+                      "inside a 'destined' block.");
             }
             if (auto* ifStmt = dynamic_cast<IfStmt*>(stmt.get())) {
                 checkNoJumpStmt(ifStmt->thenBranch.get());
-                for (auto& elif : ifStmt->elifBranches) {
-                    checkNoJumpStmt(elif.body.get());
-                }
+                for (auto& elif : ifStmt->elifBranches) checkNoJumpStmt(elif.body.get());
                 if (ifStmt->elseBranch) checkNoJumpStmt(ifStmt->elseBranch.get());
             }
             if (auto* whirl = dynamic_cast<WhirlStmt*>(stmt.get())) {
@@ -582,6 +593,10 @@ void SemanticAnalyzer::visit(DestinedStmt* node) {
             }
             if (auto* fore = dynamic_cast<ForeStmt*>(stmt.get())) {
                 checkNoJumpStmt(fore->body.get());
+            }
+            // P0-4 FIX: Recurse into nested destined blocks
+            if (auto* dest = dynamic_cast<DestinedStmt*>(stmt.get())) {
+                checkNoJumpStmt(dest->body.get());
             }
         }
     };
@@ -854,35 +869,24 @@ void SemanticAnalyzer::visit(AssignStmt* node) {
             error(targetIdent->token, "Assignment to undeclared variable '" + targetIdent->token.lexeme + "'.");
         }
 
-        // Evaluate the right side.
-        evaluate(node->value.get());
-
-        // Check if the right side is a stance reference (Disk:Reading).
+        // P0-1 FIX: Do NOT call evaluate(node->value.get()) here. 
+        // We only inspect the AST shape for stance transitions.
         auto* valIdent = dynamic_cast<IdentifierExpr*>(node->value.get());
         if (valIdent && !valIdent->stanceName.lexeme.empty()) {
-            // This is a stance transition. Validate the sigil type matches.
-            if (sym->type->kind != TypeKind::SIGIL &&
-                sym->type->kind != TypeKind::HARDWARE) {
-                error(node->token,
-                      "Cannot perform stance transition on '" + sym->name +
-                      "' — it is not a sigil.");
+            if (sym->type->kind != TypeKind::SIGIL && sym->type->kind != TypeKind::HARDWARE) {
+                error(node->token, "Cannot perform stance transition on '" + sym->name + "' — it is not a sigil.");
             }
-            // Validate the sigil name matches (Disk:Reading on a Disk variable).
             if (sym->type->name != valIdent->token.lexeme) {
-                error(node->token,
-                      "Stance type mismatch: '" + sym->name + "' is '" + sym->type->name +
-                      "' but stance belongs to '" + valIdent->token.lexeme + "'.");
+                error(node->token, "Stance type mismatch: '" + sym->name + "' is '" + sym->type->name + "' but stance belongs to '" + valIdent->token.lexeme + "'.");
             }
-            // THE TYPESTATE UPDATE: The compiler now remembers the new stance.
             sym->currentStance = valIdent->stanceName.lexeme;
-            return; // Stance transition complete — no further type checking needed.
+            return; 
         }
 
-        // Left side is not a plain identifier (e.g., ctrl->field = value).
-        auto targetType = evaluate(node->target.get()); // Validates lvalue
-        auto valueType  = evaluate(node->value.get());  // Validates rvalue
+        // P0-1 FIX: Evaluate exactly once, right before the strict check.
+        auto targetType = evaluate(node->target.get());
+        auto valueType  = evaluate(node->value.get());  
 
-        // --- Strict Assignment Check ---
         if (!isAssignmentCompatible(sym->type, valueType)) {
             error(node->token,
                   "Type mismatch: cannot implicitly assign '" +
@@ -1081,6 +1085,10 @@ void SemanticAnalyzer::visit(BinaryExpr* node) {
     switch (node->op.type) {
         case TokenType::ARROW:
         case TokenType::DOT: {
+            // Prevent -> access on legion SoA value elements
+            if (node->op.type == TokenType::ARROW && leftType && leftType->kind == TypeKind::LEGION) {
+                error(node->op, "Cannot use '->' on a legion element. Legion array elements are values, not pointers. Use '.' instead.");
+            }
             // Member access: ctrl->sector_count, pkt.length
             //
             // FATAL FIX 3: Return the FIELD's type, not the container's type.
@@ -1105,10 +1113,14 @@ void SemanticAnalyzer::visit(BinaryExpr* node) {
                 currentExprType = typeRegistry.count("soul16")
                     ? typeRegistry["soul16"]
                     : leftType;
+            } else if (rightIdent && leftType && leftType->fields.count(rightIdent->token.lexeme)) {
+                // Actually extract and return the specific field's type!
+                currentExprType = leftType->fields[rightIdent->token.lexeme];
             } else if (leftType && leftType->kind == TypeKind::PRIMITIVE && !leftType->fields.empty()) {
-                // THE FIX (1B): Reject unknown fields on registered primitives (like scroll)
+                // Reject unknown fields on registered primitives (like scroll)
                 error(node->token, "Unknown field '" + rightIdent->token.lexeme + "' on type '" + leftType->name + "'.");
             } else {
+                // Fallback (undeclared fields default to container type to avoid crash)
                 currentExprType = leftType;
             }
             

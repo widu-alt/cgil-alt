@@ -1,0 +1,53 @@
+// =============================================================================
+// CGIL ISOLATED TEST 13: The V1.0 Valid Crucible
+// =============================================================================
+
+rank SysErr { Fail }
+sigil Disk { stance Idle; }
+legion Particle { mark16 x; }
+sigil Box { mark16 x; }
+
+// -----------------------------------------------------------------------------
+// P0-3: Tuple Heuristic Test
+// This spell has two 'mark16' parameters. The old CodeGen would map BOTH 
+// return slots to the first parameter (slotA), generating wrong C code.
+// -----------------------------------------------------------------------------
+spell complex_fetch(own sigil* Disk:Idle d, mark16 slotA, mark16 slotB) -> (sigil* Disk, mark16, mark16 | ruin<SysErr>) {
+    yield (d, slotA, slotB);
+}
+
+// -----------------------------------------------------------------------------
+// P0-2: Legion Array Leak Test - Part 1
+// We declare a legion array named 'swarm'.
+// -----------------------------------------------------------------------------
+spell use_legion() -> abyss {
+    deck[5] Particle swarm;
+    swarm[0].x = 10;
+}
+
+// -----------------------------------------------------------------------------
+// P0-2: Legion Array Leak Test - Part 2
+// We declare a normal array also named 'swarm'. If the CodeGen state leaked,
+// it will hallucinate this as a legion and emit 'swarm_x[0]', crashing GCC.
+// -----------------------------------------------------------------------------
+spell use_normal() -> abyss {
+    deck[5] Box swarm;
+    swarm[0].x = 20; 
+}
+
+// -----------------------------------------------------------------------------
+// P0-1: Double-Evaluation Test
+// -----------------------------------------------------------------------------
+spell consume_disk(own sigil* Disk:Idle ptr) -> mark16 {
+    yield 42;
+}
+
+spell main() -> mark16 {
+    sigil Disk d = Disk:Idle {};
+    
+    // If the SA double-evaluates the assignment, it will process 'own &d' twice
+    // and throw a false "Use-after-move" semantic error. 
+    mark16 val = consume_disk(own &d);
+
+    yield 0;
+}

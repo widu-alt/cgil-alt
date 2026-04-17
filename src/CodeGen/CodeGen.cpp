@@ -393,27 +393,22 @@ void CodeGenVisitor::emitTupleTypedefIfNeeded(SpellDecl* node) {
     emitLine("typedef struct {");
     indentLevel++;
 
-    // __elem0: First return type (the ownership pointer for <~ rebinding).
-    // LANDMINE 2 FIX:
-    //   The original guessed isPointer from tuple size — completely wrong for
-    //   tuples like (mark16, soul16) where neither element is a pointer.
-    //   ReturnTypeInfo.isPointer is now set by the Parser when '*' was present.
-    //   We read it here exactly. No guessing.
-    if (!node->returnTypes.empty()) {
-        std::string elem0Type = getCType(node->returnTypes[0].typeToken);
-        if (node->returnTypes[0].isPointer) {
-            emitLine(elem0Type + "* __elem0; // ownership pointer (<~ rebinding target)");
+    // THE FIX: Dynamically generate ALL tuple elements, not just 0 and 1
+    for (size_t i = 0; i < node->returnTypes.size(); ++i) {
+        bool isOmenSlot = (node->hasOmen && i == node->returnTypes.size() - 1);
+        
+        if (isOmenSlot && !node->omenErrorType.lexeme.empty()) {
+            std::string successTypeName = node->returnTypes[i].typeToken.lexeme;
+            std::string omenName = getOmenTypeName(successTypeName, node->omenErrorType.lexeme);
+            emitLine(omenName + " __elem" + std::to_string(i) + "; // omen payload (success or ruin)");
         } else {
-            emitLine(elem0Type + " __elem0;  // first return element");
+            std::string elemType = getCType(node->returnTypes[i].typeToken);
+            if (node->returnTypes[i].isPointer) {
+                emitLine(elemType + "* __elem" + std::to_string(i) + ";");
+            } else {
+                emitLine(elemType + " __elem" + std::to_string(i) + ";");
+            }
         }
-    }
-
-    // __elem1: The Omen payload (success or ruin), if present.
-    if (node->hasOmen && !node->omenErrorType.lexeme.empty() &&
-        node->returnTypes.size() > 1) {
-        std::string successTypeName = node->returnTypes[1].typeToken.lexeme;
-        std::string omenName = getOmenTypeName(successTypeName, node->omenErrorType.lexeme);
-        emitLine(omenName + " __elem1; // omen payload (success or ruin)");
     }
 
     indentLevel--;
@@ -654,7 +649,8 @@ void CodeGenVisitor::visit(SpellDecl* node) {
     inDestinedSpell = false;
     currentDestinedBlocks.clear();
     stancePointerVars.clear();
-    currentSpellDestinedBase = 0; // PLAN D: reset per-spell base for next spell
+    legionArrayVars.clear();
+    currentSpellDestinedBase = 0; 
 
     indentLevel--;
     emitLine("}");
@@ -1158,6 +1154,7 @@ void CodeGenVisitor::visit(VarDeclStmt* node) {
 // GNU extensions. This is correct for bare-metal GCC targets.
 void CodeGenVisitor::visit(PostfixExpr* node) {
     if (currentPhase != Phase::IMPLEMENTATIONS) return;
+    if (!currentSpell) return;
 
     std::string tmpType = "__auto_type";
     bool isAbyssOmen = false;
@@ -1179,11 +1176,12 @@ void CodeGenVisitor::visit(PostfixExpr* node) {
     emit("; ");
     emit("if (_omen_tmp_.__is_ruin) { ");
 
-    // THE FIX: Type-Matching Early Return Resolver
-    // Dynamically maps local parameters to the required return tuple slots during a panic.
+    // THE FIX: Type-Matching Early Return Resolver (P0-3 Patched)
     std::string rhs;
     if (currentSpell->returnTypes.size() > 1) {
         rhs = "(" + currentReturnTypeName + "){ ";
+        std::set<std::string> usedParams; // P0-3 FIX: Track consumed parameters
+        
         for (size_t i = 0; i < currentSpell->returnTypes.size(); ++i) {
             if (i > 0) rhs += ", ";
             rhs += ".__elem" + std::to_string(i) + " = ";
@@ -1193,12 +1191,15 @@ void CodeGenVisitor::visit(PostfixExpr* node) {
                 std::string expectedOmen = getOmenTypeName(currentSpell->returnTypes[i].typeToken.lexeme, currentSpell->omenErrorType.lexeme);
                 rhs += "(" + expectedOmen + "){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }";
             } else {
-                // Scan parameters for a type match
-                std::string matchedVar = "0"; // Safe fallback for unmapped slots
+                // Scan parameters for a type match that hasn't been used yet
+                std::string matchedVar = "0"; 
                 for (const auto& param : currentSpell->params) {
                     if (param.type.lexeme == currentSpell->returnTypes[i].typeToken.lexeme &&
-                        param.isPointer == currentSpell->returnTypes[i].isPointer) {
+                        param.isPointer == currentSpell->returnTypes[i].isPointer &&
+                        usedParams.find(param.name.lexeme) == usedParams.end()) {
+                        
                         matchedVar = param.name.lexeme;
+                        usedParams.insert(param.name.lexeme); // Mark as consumed
                         break;
                     }
                 }

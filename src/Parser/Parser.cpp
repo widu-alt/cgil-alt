@@ -962,7 +962,7 @@ std::unique_ptr<Expr> Parser::parsePrecedence(int minPrecedence) {
             }
             auto memberExpr = std::make_unique<IdentifierExpr>(member);
             left = std::make_unique<BinaryExpr>(std::move(left), op, std::move(memberExpr));
-            
+
         } else if (op.type == TokenType::PLUS_PLUS || op.type == TokenType::MINUS_MINUS) {
             // Postfix increment/decrement: i++, val--
             // These operators do not consume a right-hand expression!
@@ -1128,6 +1128,10 @@ Token Parser::peekNextNext() const {
 
 // Return the most recently consumed token.
 Token Parser::previous() const {
+    // Prevent UB if current is 0 during error synchronization
+    if (current == 0) {
+        return tokens.empty() ? Token{TokenType::END_OF_FILE, "", 0, 0} : tokens[0];
+    }
     return tokens[current - 1];
 }
 
