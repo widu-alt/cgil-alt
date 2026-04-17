@@ -1191,19 +1191,12 @@ void CodeGenVisitor::visit(PostfixExpr* node) {
                 std::string expectedOmen = getOmenTypeName(currentSpell->returnTypes[i].typeToken.lexeme, currentSpell->omenErrorType.lexeme);
                 rhs += "(" + expectedOmen + "){ .__is_ruin = 1, .__ruin = _omen_tmp_.__ruin }";
             } else {
-                // Scan parameters for a type match that hasn't been used yet
-                std::string matchedVar = "0"; 
-                for (const auto& param : currentSpell->params) {
-                    if (param.type.lexeme == currentSpell->returnTypes[i].typeToken.lexeme &&
-                        param.isPointer == currentSpell->returnTypes[i].isPointer &&
-                        usedParams.find(param.name.lexeme) == usedParams.end()) {
-                        
-                        matchedVar = param.name.lexeme;
-                        usedParams.insert(param.name.lexeme); // Mark as consumed
-                        break;
-                    }
+                // PATCH 3: Use the ownership parameter name bound by the SA
+                if (!node->ownershipParamName.empty()) {
+                    rhs += node->ownershipParamName;
+                } else {
+                    rhs += "0"; // Defensive fallback
                 }
-                rhs += matchedVar;
             }
         }
         rhs += " }";
@@ -1551,6 +1544,8 @@ void CodeGenVisitor::visit(CastExpr* node) {
     if (currentPhase != Phase::IMPLEMENTATIONS) return;
 
     std::string cType = getCType(node->targetType);
+    if (node->isPointer) cType += "*"; // Append pointer asterisk
+    
     emit("((" + cType + ")(");
     node->operand->accept(*this);
     emit("))");

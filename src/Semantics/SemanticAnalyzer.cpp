@@ -576,27 +576,47 @@ void SemanticAnalyzer::visit(DestinedStmt* node) {
     // This helper lambda walks the block recursively and errors on any YieldStmt.
     std::function<void(BlockStmt*)> checkNoJumpStmt = [&](BlockStmt* block) {
         for (auto& stmt : block->statements) {
-            if (dynamic_cast<YieldStmt*>(stmt.get()) ||
-                dynamic_cast<ShatterStmt*>(stmt.get()) ||
+            // YieldStmt is always illegal inside destined — yield emits a goto
+            // that jumps to the destined label itself, creating an infinite loop.
+            if (dynamic_cast<YieldStmt*>(stmt.get())) {
+                error(stmt->token,
+                      "'yield' is illegal inside a 'destined' cleanup block. "
+                      "The destined block executes AFTER yield — placing yield here "
+                      "creates an infinite goto loop in the generated C.");
+            }
+
+            // ShatterStmt and SurgeStmt are only illegal at the TOP LEVEL of the
+            // destined body, or inside if-branches within the destined body.
+            // They are VALID inside nested fore/whirl loops within destined because
+            // they break/continue the inner loop, not the destined scope.
+            // The CodeGen emits 'break' and 'continue' which are only valid
+            // inside loop constructs — at the destined label level, there is no loop.
+            if (dynamic_cast<ShatterStmt*>(stmt.get()) ||
                 dynamic_cast<SurgeStmt*>(stmt.get())) {
                 error(stmt->token,
-                      "Control flow jumps ('yield', 'shatter', 'surge') are illegal "
-                      "inside a 'destined' block.");
+                      "'shatter' and 'surge' are illegal at the top level of a "
+                      "'destined' cleanup block. The destined labels are emitted "
+                      "after all loop constructs have closed — 'break' and 'continue' "
+                      "would be invalid C at that point. Move cleanup logic before "
+                      "the loop, or use a whirl/fore inside destined if iteration is needed.");
             }
+
+            // Recurse ONLY into if-branches. These do not change the loop context,
+            // so shatter/surge inside an if-branch inside a destined is still invalid.
+            // Do NOT recurse into WhirlStmt or ForeStmt — shatter/surge inside those
+            // loops is valid (they target the inner loop, not the destined scope).
             if (auto* ifStmt = dynamic_cast<IfStmt*>(stmt.get())) {
                 checkNoJumpStmt(ifStmt->thenBranch.get());
-                for (auto& elif : ifStmt->elifBranches) checkNoJumpStmt(elif.body.get());
-                if (ifStmt->elseBranch) checkNoJumpStmt(ifStmt->elseBranch.get());
+                for (auto& elif : ifStmt->elifBranches) {
+                    checkNoJumpStmt(elif.body.get());
+                }
+                if (ifStmt->elseBranch) {
+                    checkNoJumpStmt(ifStmt->elseBranch.get());
+                }
             }
-            if (auto* whirl = dynamic_cast<WhirlStmt*>(stmt.get())) {
-                checkNoJumpStmt(whirl->body.get());
-            }
-            if (auto* fore = dynamic_cast<ForeStmt*>(stmt.get())) {
-                checkNoJumpStmt(fore->body.get());
-            }
-            // P0-4 FIX: Recurse into nested destined blocks
-            if (auto* dest = dynamic_cast<DestinedStmt*>(stmt.get())) {
-                checkNoJumpStmt(dest->body.get());
+            // Nested destined blocks also checked recursively.
+            if (auto* nested = dynamic_cast<DestinedStmt*>(stmt.get())) {
+                if (nested->body) checkNoJumpStmt(nested->body.get());
             }
         }
     };
@@ -860,6 +880,30 @@ void SemanticAnalyzer::visit(AssignStmt* node) {
               "literals, and expression results cannot be assigned to.");
     }
 
+    // === STANCE TRANSITION INTERCEPTION ===
+    // Before anything else, check if the RHS is a stance reference.
+    // Stance transitions MUST target a plain named variable.
+    // The typestate system tracks stances by variable name — it cannot track
+    // what *ptr or **pptr is pointing to at compile time.
+    {
+        auto* valIdent = dynamic_cast<IdentifierExpr*>(node->value.get());
+        if (valIdent && !valIdent->stanceName.lexeme.empty()) {
+            // This is a stance transition attempt.
+            auto* targetIdent = dynamic_cast<IdentifierExpr*>(node->target.get());
+            if (!targetIdent) {
+                // Target is not a plain identifier — could be *ptr, **pptr, arr[i], etc.
+                error(node->target->token,
+                      "Stance transitions require a directly-named variable as the target. "
+                      "The Cgil typestate system tracks stances by variable name in the "
+                      "symbol table and cannot resolve stance through pointer dereferences, "
+                      "array subscripts, or member access expressions at compile time. "
+                      "Assign the hardware pointer to a named variable first: "
+                      "'sigil* Disk ctrl = *pptr; ctrl = Disk:Active;'");
+            }
+            // targetIdent is valid — fall through to the existing identifier path.
+        }
+    }
+    
     // Check if the left side is a plain identifier.
     auto* targetIdent = dynamic_cast<IdentifierExpr*>(node->target.get());
 
@@ -883,16 +927,27 @@ void SemanticAnalyzer::visit(AssignStmt* node) {
             return; 
         }
 
-        // P0-1 FIX: Evaluate exactly once, right before the strict check.
-        auto targetType = evaluate(node->target.get());
-        auto valueType  = evaluate(node->value.get());  
+        // Complex target: ctrl->field = value, buf[i] = value, *ptr = value
+        // The stance interception above guarantees the value is NOT a stance reference
+        // if we reach here. Evaluate both sides cleanly without double-evaluation.
+        {
+            auto targetType = evaluate(node->target.get());
+            auto valueType  = evaluate(node->value.get());
 
-        if (!isAssignmentCompatible(sym->type, valueType)) {
-            error(node->token,
-                  "Type mismatch: cannot implicitly assign '" +
-                  (valueType ? valueType->name : "?") + "' to '" +
-                  (sym->type ? sym->type->name : "?") + "'. " +
-                  "Use 'cast<" + sym->type->name + ">(expr)' for explicit conversion.");
+            if (targetType && valueType && !isAssignmentCompatible(targetType, valueType)) {
+                // Build a helpful error message that names the actual types involved.
+                std::string targetName = targetType->name;
+                // Strip internal __array_ prefix from error messages.
+                if (targetName.rfind("__array_", 0) == 0) {
+                    error(node->target->token,
+                        "Array-to-array assignment is not supported. "
+                        "Copy elements individually with a fore loop.");
+                }
+                error(node->token,
+                    "Type mismatch in assignment: cannot assign '" +
+                    (valueType->name) + "' to '" + targetName + "'. "
+                    "Use 'cast<" + targetName + ">(expr)' for explicit numeric conversion.");
+            }
         }
         return;
     }
@@ -1233,20 +1288,26 @@ void SemanticAnalyzer::visit(PostfixExpr* node) {
               "You can only use '?' inside a spell that returns 'T | ruin<E>'.");
     }
 
-    // THE FIX (BUG 1): Enforce Destined Block for Ownership Tuples
-    // Dynamically scan the spell body to see if a destined block exists.
+    // PATCH 3: Bind the ownership parameter by finding the FIRST sigil pointer
+    // parameter declared with 'own' in the enclosing spell's parameter list.
+    // This is the semantically correct variable to carry in the early-return tuple —
+    // it is the parameter that holds hardware ownership and must be returned
+    // to the caller even on the error path.
+    //
+    // We search parameters in declaration order and take the first isPointer param.
+    // The spec requires exactly one owned sigil* in tuple-returning spells.
     if (currentSpell && currentSpell->returnTypes.size() > 1) {
-        bool hasDestined = false;
-        for (const auto& stmt : currentSpell->body) {
-            if (dynamic_cast<DestinedStmt*>(stmt.get())) {
-                hasDestined = true;
+        for (const auto& param : currentSpell->params) {
+            if (param.isPointer) {
+                node->ownershipParamName = param.name.lexeme;
                 break;
             }
         }
-        if (!hasDestined) {
-            error(node->op, 
-                  "Spells returning ownership tuples must use a 'destined' block when "
-                  "using '?' to ensure safe hardware pointer cleanup before early return.");
+        if (node->ownershipParamName.empty()) {
+            // Defensive: should not happen if SA validated the tuple spell correctly.
+            error(node->op,
+                  "Internal: tuple-returning spell has no sigil* parameter to "
+                  "carry in the early-return slot. This is a compiler bug.");
         }
     }
 
@@ -1727,11 +1788,19 @@ void SemanticAnalyzer::visit(CastExpr* node) {
     if (operandType && operandType->kind == TypeKind::SIGIL) {
         error(node->token, "Cannot cast sigil type '" + operandType->name + "'. Access fields directly.");
     }
-    if (targetType->kind == TypeKind::SIGIL) {
+    // Allow casting to sigil* (pointers), but not to raw sigil values
+    if (targetType->kind == TypeKind::SIGIL && !node->isPointer) {
         error(node->targetType, "Cannot cast to sigil type '" + targetType->name + "'.");
     }
 
-    currentExprType = targetType;
+    // THE FIX: Wrap the type if casting to a pointer
+    if (node->isPointer) {
+        auto ptrType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::PRIMITIVE, targetType->name + "*"});
+        ptrType->elementType = targetType;
+        currentExprType = ptrType;
+    } else {
+        currentExprType = targetType;
+    }
 }
 
 void SemanticAnalyzer::visit(UpdateExpr* node) {

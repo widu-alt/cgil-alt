@@ -597,13 +597,15 @@ struct UnaryExpr : public Expr {
 // This is the ? operator that binds tighter than ~> per the spec.
 struct PostfixExpr : public Expr {
     std::unique_ptr<Expr> operand;
-    Token                 op;      // The '?' token
-    // The resolved Omen TypeInfo, set by SemanticAnalyzer during Pass 2.
-    // CodeGen reads this to:
-    //   a) Know the concrete Omen typedef name for the _tmp variable type.
-    //   b) Detect abyss Omens (no __value field) and suppress __value access.
-    // If nullptr, CodeGen falls back to __auto_type (should not happen after SA).
-   std::shared_ptr<TypeInfo> resolvedOmenType = nullptr;
+    Token                 op;
+    std::shared_ptr<TypeInfo> resolvedOmenType = nullptr;
+
+    // PATCH 3: The name of the ownership parameter (sigil* param) to use
+    // in the early-return tuple when this ? operator propagates a ruin.
+    // Populated by SemanticAnalyzer::visit(PostfixExpr*) during Pass 2.
+    // CodeGen reads this instead of the type-name heuristic.
+    // Empty string = no ownership slot (spell does not return a tuple).
+    std::string ownershipParamName;
 
     PostfixExpr(std::unique_ptr<Expr> operand, Token op)
         : operand(std::move(operand)), op(op) {
@@ -745,13 +747,14 @@ struct AssignExpr : public Expr {
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 
-// cast<mark32>(val) — explicit type conversion
+// cast<mark32>(val) or cast<mark16*>(val) — explicit type conversion
 struct CastExpr : public Expr {
     Token                 targetType; 
+    bool                  isPointer; // THE FIX: Track if we are casting to a pointer
     std::unique_ptr<Expr> operand;
 
-    CastExpr(Token targetTok, std::unique_ptr<Expr> op)
-        : targetType(targetTok), operand(std::move(op)) {
+    CastExpr(Token targetTok, bool isPtr, std::unique_ptr<Expr> op)
+        : targetType(targetTok), isPointer(isPtr), operand(std::move(op)) {
         token = targetTok;
     }
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
