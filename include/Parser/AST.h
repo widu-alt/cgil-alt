@@ -208,7 +208,7 @@ struct StructFieldInit {
 //   SPECIFIC RUIN:           (ctrl, ruin<DiskError::HardwareFault>) isRuin=true,  isSpecificRuin=true
 //   CATCH-ALL RUIN:          (ctrl, ruin err)                       isRuin=true,  isSpecificRuin=false
 //
-// WHY isPayloadless EXISTS (Ghost Variable fix):
+// WHY isPayloadless EXISTS:
 //   For spells returning 'abyss | ruin<T>', the success has no payload value.
 //   Writing '(ctrl, abyss my_var)' would register my_var in the symbol table
 //   but CodeGen would skip declaring it (void variable), making any reference
@@ -239,7 +239,7 @@ struct DivineBranch {
 };
 
 // =============================================================================
-// RETURN TYPE INFO  (Landmine 2 fix)
+// RETURN TYPE INFO 
 // =============================================================================
 //
 // WHY THIS EXISTS:
@@ -750,7 +750,7 @@ struct AssignExpr : public Expr {
 // cast<mark32>(val) or cast<mark16*>(val) — explicit type conversion
 struct CastExpr : public Expr {
     Token                 targetType; 
-    bool                  isPointer; // THE FIX: Track if we are casting to a pointer
+    bool                  isPointer;
     std::unique_ptr<Expr> operand;
 
     CastExpr(Token targetTok, bool isPtr, std::unique_ptr<Expr> op)

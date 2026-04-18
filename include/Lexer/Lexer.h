@@ -23,7 +23,7 @@ enum class TokenType {
     REV_WEAVE, ASSIGN, PIPE, QUESTION, AMP, SCOPE,
 
     // Literals & Identifiers
-    IDENT, INT_LIT, STRING_LIT,
+    IDENT, INT_LIT, FLOAT_LIT, STRING_LIT,
 
     // Delimiters
     LBRACE, RBRACE, LPAREN, RPAREN, LBRACKET, RBRACKET,

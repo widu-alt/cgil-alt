@@ -195,6 +195,8 @@ private:
     // Use this instead of typeRegistry[] which silently inserts null entries.
     std::shared_ptr<TypeInfo> resolveType(Token nameToken);
 
+    std::shared_ptr<TypeInfo> getBuiltinType(const std::string& name) const;
+
     // =========================================================================
     // PLAN A: Centralized FPU Warning
     // =========================================================================
@@ -256,14 +258,8 @@ private:
     // Register all built-in Cgil primitive types in the typeRegistry.
     // Called once in the constructor before any source file is analyzed.
     //
-    // FIXED: Now registers ALL Cgil primitives from the spec:
-    //   mark16, mark32, soul16, soul32, addr, flow, rune, oath, scroll, abyss,
-    //   deck, tuple
-    //
-    // Previously missing: mark32, soul32, flow, deck, tuple
-    // Previously wrong:   abyss was registered as PRIMITIVE — now uses its
-    //                     own PRIMITIVE entry (ABYSS TypeKind is removed;
-    //                     abyss is a primitive with special void semantics).
+    // abyss uses its own PRIMITIVE entry (ABYSS TypeKind is removed;
+    // abyss is a primitive with special void semantics).
     void registerPrimitives() {
         // Helper: add a primitive type with kind=PRIMITIVE
         auto addPrim = [&](const std::string& name) {

@@ -75,8 +75,8 @@ void Lexer::scanToken() {
         case '*': addToken(TokenType::STAR); break;
         case '?': addToken(TokenType::QUESTION); break;
         case '@': addToken(TokenType::AT); break;
-        case '^': addToken(TokenType::CARET); break;   // P1 FIX: Bitwise XOR
-        case '%': addToken(TokenType::PERCENT); break; // P1 FIX: Modulo
+        case '^': addToken(TokenType::CARET); break;
+        case '%': addToken(TokenType::PERCENT); break;
 
         // One or two character operators
         case ':': addToken(match(':') ? TokenType::SCOPE : TokenType::COLON); break;
@@ -92,27 +92,27 @@ void Lexer::scanToken() {
             break;
 
         case '&': 
-            addToken(match('&') ? TokenType::AMPAMP : TokenType::AMP); // P1 FIX: Logical AND vs Bitwise/Address
+            addToken(match('&') ? TokenType::AMPAMP : TokenType::AMP);
             break;
 
         case '|': 
-            addToken(match('|') ? TokenType::PIPEPIPE : TokenType::PIPE); // P1 FIX: Logical OR vs Union
+            addToken(match('|') ? TokenType::PIPEPIPE : TokenType::PIPE);
             break;
 
         case '~': 
-            addToken(match('>') ? TokenType::WEAVE : TokenType::TILDE); // P1 FIX: Weave vs Bitwise NOT
+            addToken(match('>') ? TokenType::WEAVE : TokenType::TILDE);
             break;
 
         case '<': 
             if (match('~')) addToken(TokenType::REV_WEAVE);
-            else if (match('<')) addToken(TokenType::LSHIFT); // P1 FIX: Left Shift
-            else if (match('=')) addToken(TokenType::LEQ);    // P1 FIX: Less Than or Equal
+            else if (match('<')) addToken(TokenType::LSHIFT);
+            else if (match('=')) addToken(TokenType::LEQ);
             else addToken(TokenType::LT); 
             break;
 
         case '>': 
-            if (match('>')) addToken(TokenType::RSHIFT); // P1 FIX: Right Shift
-            else if (match('=')) addToken(TokenType::GEQ);    // P1 FIX: Greater Than or Equal
+            if (match('>')) addToken(TokenType::RSHIFT);
+            else if (match('=')) addToken(TokenType::GEQ);
             else addToken(TokenType::GT);
             break;
 
@@ -167,10 +167,21 @@ void Lexer::number() {
             throw std::runtime_error("Malformed hex literal at line " + std::to_string(line) + ", col " + std::to_string(column));
         }
         while (std::isxdigit(peek())) advance();
+        addToken(TokenType::INT_LIT);
     } else {
         while (std::isdigit(peek())) advance();
+        
+        // --- THE FLOAT ---
+        // Look for a decimal point followed by at least one digit (e.g., 3.14)
+        if (peek() == '.' && std::isdigit(peekNext())) {
+            advance(); // Consume the '.'
+            while (std::isdigit(peek())) advance();
+            addToken(TokenType::FLOAT_LIT);
+            return;
+        }
+        
+        addToken(TokenType::INT_LIT);
     }
-    addToken(TokenType::INT_LIT);
 }
 
 void Lexer::string() {
@@ -195,12 +206,6 @@ void Lexer::string() {
 
     advance(); // Consume the closing "
     
-    /* * CODEGEN CONTRACT NOTE:
-     * Escape sequences (e.g. \n) are captured here as raw text (two characters: '\' and 'n'). 
-     * When emitting `Cgil_Scroll` string literals during CodeGen, the len field 
-     * must calculate the exact byte-length of the string natively interpreted by C,
-     * excluding the null terminator. 
-     */
     std::string value = source.substr(start + 1, current - start - 2);
     addToken(TokenType::STRING_LIT, value); 
 }
@@ -218,8 +223,6 @@ char Lexer::peek() const {
     return source[current];
 }
 
-// Reserved for future use in the Parser or extended Lexer lookahead.
-// Not currently utilized in the core Lexer loop.
 char Lexer::peekNext() const {
     if (current + 1 >= source.length()) return '\0';
     return source[current + 1];
@@ -245,7 +248,7 @@ void Lexer::skipWhitespace() {
                 break;
             case '\n':
                 line++;
-                column = 0; // advance() will increment this to 1
+                column = 0;
                 advance();
                 break;
             default:

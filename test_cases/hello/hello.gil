@@ -9,7 +9,7 @@ pact <stdio.h>;
 // 2. Map the C standard library function to Cgil's type system
 conjure spell putchar(mark32 c) -> mark32;
 
-// 3. Define our native Cgil print helper
+// 3. Define native Cgil print helper
 spell print(scroll msg) -> abyss {
     fore (mark16 i = 0; i < msg.len; i = i + 1) {
         putchar(msg.ptr[i]);
@@ -18,7 +18,6 @@ spell print(scroll msg) -> abyss {
 
 // 4. The main entry point
 spell main() -> mark16 {
-    print("Hello from Cgil running natively on Windows!\n");
-    print("The compiler forge is officially complete.\n");
+    print("Hello World!\n");
     yield 0;
 }

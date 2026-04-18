@@ -1,7 +1,7 @@
 #include "../../include/Semantics/SemanticAnalyzer.h"
-#include <functional> // For std::function (Fix 1)
-#include <set>        // For std::set (Fix 2)
-#include <typeinfo>   // For typeid (Supplementary Fix)
+#include <functional> // For std::function
+#include <set>        // For std::set
+#include <typeinfo>   // For typeid
 
 // Returns true if valueType can be assigned to targetType without a cast.
 // Cgil assignment compatibility rules:
@@ -81,6 +81,12 @@ std::shared_ptr<TypeInfo> SemanticAnalyzer::resolveType(Token nameToken) {
     return it->second;
 }
 
+std::shared_ptr<TypeInfo> SemanticAnalyzer::getBuiltinType(const std::string& name) const {
+    auto it = typeRegistry.find(name);
+    if (it != typeRegistry.end() && it->second) return it->second;
+    return std::make_shared<TypeInfo>(TypeInfo{TypeKind::PRIMITIVE, name});
+}
+
 // =============================================================================
 // PASS 1 — THE GLOBAL LEDGER
 // =============================================================================
@@ -130,7 +136,7 @@ void SemanticAnalyzer::visit(RankDecl* node) {
         TypeInfo{TypeKind::RANK, node->name.lexeme}
     );
 
-    // FATAL FIX 2: Populate rankVariants so DivineStmt can enforce exhaustiveness.
+    // Populate rankVariants so DivineStmt can enforce exhaustiveness.
     // Store the variant list in declaration order.
     // Pass 2's visit(DivineStmt*) reads this to verify specific ruin branches
     // cover all variants when no catch-all is present.
@@ -173,7 +179,7 @@ void SemanticAnalyzer::visit(SigilDecl* node) {
 
     // Pass 2: Validate field types, check FPU usage, and populate TypeInfo::fields.
     //
-    // FATAL FIX 3: Populate the field map on the sigil's TypeInfo so that
+    // Populate the field map on the sigil's TypeInfo so that
     // member access expressions (ctrl->sector_count) resolve to the correct
     // field type (soul16) instead of the container type (Disk).
     //
@@ -215,9 +221,9 @@ void SemanticAnalyzer::visit(LegionDecl* node) {
     // Pass 2: Validate field types.
     auto& legionTypeInfo = typeRegistry.at(node->name.lexeme);
     for (auto& field : node->fields) {
-        warnIfFlow(field.type); // P1-2 FIX
+        warnIfFlow(field.type);
         auto fieldType = resolveType(field.type);
-        // THE FIX: Populate the field map so DOT access knows the type
+        // Populate the field map so DOT access knows the type
         legionTypeInfo->fields[field.name.lexeme] = fieldType; 
     }
 }
@@ -234,8 +240,6 @@ void SemanticAnalyzer::visit(LegionDecl* node) {
 //   4. Walk every statement in the body.
 //   5. Close the scope and clear currentSpell.
 //
-// FIXED: The original returned immediately on `!isPassOne`, meaning spell bodies
-//        were NEVER analyzed. Pass 2 was a complete no-op for all spell content.
 void SemanticAnalyzer::visit(SpellDecl* node) {
     if (isPassOne) {
         if (spellRegistry.count(node->name.lexeme)) {
@@ -257,7 +261,7 @@ void SemanticAnalyzer::visit(SpellDecl* node) {
     SpellDecl* previousSpell = currentSpell;
     currentSpell = node;
 
-    // P1-1 FIX: RAII guard guarantees scope exit even if an exception is thrown
+    // RAII guard guarantees scope exit even if an exception is thrown
     struct ScopeGuard {
         SymbolTable& sym;
         ~ScopeGuard() { sym.exitScope(); }
@@ -304,8 +308,6 @@ void SemanticAnalyzer::visit(SpellDecl* node) {
 //
 // PASS 2: No action — hardware is globally registered in Pass 1.
 //
-// FIXED: Now uses resolveType() instead of typeRegistry[] for safe lookup.
-//        Now passes isHardware=true and isPortline to the symbol.
 void SemanticAnalyzer::visit(HardwareDecl* node) {
     if (!isPassOne) return;
 
@@ -389,7 +391,7 @@ void SemanticAnalyzer::visit(YieldStmt* node) {
         error(node->token, "'warden spell' must yield 'abyss'. ISRs cannot return values.");
     }
 
-    // THE FIX: Strict Yield Compatibility Checking
+    // Strict Yield Compatibility Checking
     for (size_t i = 0; i < node->values.size(); i++) {
         auto valType = evaluate(node->values[i].get());
         
@@ -443,7 +445,7 @@ void SemanticAnalyzer::visit(IfStmt* node) {
 
     // Evaluate and check the if condition.
     auto condType = evaluate(node->condition.get());
-    if (!isAssignmentCompatible(typeRegistry["oath"], condType)) {
+    if (!isAssignmentCompatible(getBuiltinType("oath"), condType)) {
         error(node->condition->token, "Condition must evaluate to an 'oath' (boolean) type.");
     }
 
@@ -452,7 +454,7 @@ void SemanticAnalyzer::visit(IfStmt* node) {
 
     for (auto& elifBranch : node->elifBranches) {
         auto elifCondType = evaluate(elifBranch.condition.get());
-        if (!isAssignmentCompatible(typeRegistry["oath"], elifCondType)) {
+        if (!isAssignmentCompatible(getBuiltinType("oath"), elifCondType)) {
             error(elifBranch.condition->token, "Condition must evaluate to an 'oath' (boolean) type.");
         }
         elifBranch.body->accept(*this);
@@ -479,7 +481,14 @@ void SemanticAnalyzer::visit(ForeStmt* node) {
 
     // Check the initializer value type (e.g., 0 is mark16-compatible).
     auto initValType = evaluate(node->initValue.get());
-    (void)initValType; // V1.5 TODO: enforce compatible with initType
+
+    // ENFORCEMENT: Ensure the value assigned to the loop variable matches its type.
+    if (!isAssignmentCompatible(initType, initValType)) {
+        error(node->initValue->token, 
+              "Type mismatch in 'fore' loop initializer: cannot assign '" + 
+              (initValType ? initValType->name : "?") + "' to loop variable '" + 
+              node->initVar.lexeme + "' of type '" + initType->name + "'.");
+    }
 
     // Check the condition (e.g., i < 10).
     auto condType = evaluate(node->condition.get());
@@ -514,7 +523,7 @@ void SemanticAnalyzer::visit(WhirlStmt* node) {
     if (isPassOne) return;
 
     auto condType = evaluate(node->condition.get());
-    if (!isAssignmentCompatible(typeRegistry["oath"], condType)) {
+    if (!isAssignmentCompatible(getBuiltinType("oath"), condType)) {
         error(node->condition->token, "Condition must evaluate to an 'oath' (boolean) type.");
     }
 
@@ -548,7 +557,7 @@ void SemanticAnalyzer::visit(DestinedStmt* node) {
     // Evaluate the optional condition.
     if (node->hasCondition) {
         auto condType = evaluate(node->condition.get());
-        if (!isAssignmentCompatible(typeRegistry["oath"], condType)) {
+        if (!isAssignmentCompatible(getBuiltinType("oath"), condType)) {
             error(node->condition->token, "Destined condition must evaluate to an 'oath' (boolean) type.");
         }
     }
@@ -557,7 +566,7 @@ void SemanticAnalyzer::visit(DestinedStmt* node) {
     // The destined body shares the spell's scope — it needs to see all the
     // spell's variables (especially 'ctrl' for stance checks).
     //
-    // FATAL FIX 1: Reject yield inside destined.
+    // Reject yield inside destined.
     //
     // WHY THIS IS FATAL:
     //   destined blocks are emitted as goto LABELS at the END of the C function.
@@ -641,26 +650,21 @@ void SemanticAnalyzer::visit(DestinedStmt* node) {
 //   5. OWNERSHIP RULE: my_disk is still owned-away INSIDE every branch.
 //      The <~ rebinding happens AFTER the block completes, not inside branches.
 //
-// FIXED: The original code did targetSym->isMoved = false INSIDE the branch
-//        loop, incorrectly resurreating ownership inside the block. Per spec:
-//        "Inside branches, the caller's original variable is still owned-away."
-//        The correct behavior is to restore isMoved to false AFTER all branches
-//        have been analyzed.
 void SemanticAnalyzer::visit(DivineStmt* node) {
     if (isPassOne) return;
 
     // 1. Evaluate the spell call. It must return a TUPLE.
     //    Then validate the tuple's second element is an Omen.
     //
-    //    LANDMINE 3 FIX (Trojan Horse Tuple):
+    //    Trojan Horse Tuple:
     //    Checking TypeKind::TUPLE alone is insufficient. A math spell returning
     //    (sigil* Disk, mark16) also produces a TUPLE, but its second element
     //    is mark16, not an Omen. divine on such a spell would compile here but
     //    crash in CodeGen when it emits __result.__elem1.__is_ruin on an int16_t.
     //
-    //    We now check tupleElements[1].kind == TypeKind::OMEN explicitly.
+    //    Check tupleElements[1].kind == TypeKind::OMEN explicitly.
     //    This requires tupleElements to be populated — which is why the CallExpr
-    //    visitor now fills them in. Without that fix, this check would segfault.
+    //    visitor now fills them in.
     auto returnType = evaluate(node->spellCall.get());
 
     if (returnType->kind != TypeKind::TUPLE) {
@@ -752,16 +756,11 @@ void SemanticAnalyzer::visit(DivineStmt* node) {
     // 4. Exhaustiveness check.
     //    Spec: "Must include exactly one success branch, plus exhaustive ruin coverage
     //    (enumerated variants OR a catch-all (ctrl, ruin err))."
-    //
-    //    FIXED: The original always required a catch-all. The spec allows specific-variant
-    //    coverage without a catch-all. For V1, if all branches are specific ruins
-    //    (no catch-all), we warn but don't error — full variant coverage checking
-    //    requires enumerating the rank's variants, which is a V1.5 feature.
     if (!hasSuccess) {
         error(node->token, "Divine block is missing a success branch.");
     }
 
-    // FATAL FIX 2: Exhaustiveness enforcement.
+    // Exhaustiveness enforcement.
     //
     // If a catch-all is present, coverage is unconditionally complete — done.
     //
@@ -829,10 +828,6 @@ void SemanticAnalyzer::visit(DivineStmt* node) {
     }
 
     // 5. POST-BLOCK OWNERSHIP REBINDING (the <~ semantics).
-    //    FIXED: This happens HERE, AFTER all branches are analyzed.
-    //    The original code did this inside the branch loop — incorrect.
-    //    Per spec: the caller's variable regains ownership after the divine
-    //    block completes, not inside individual branches.
     if (targetSym) {
         targetSym->isMoved = false; // my_disk is accessible again
         // Stance becomes "Unknown" because different branches may have left
@@ -858,9 +853,6 @@ void SemanticAnalyzer::visit(DivineStmt* node) {
 //   Programmer is asserting the hardware is in a known state.
 //   The compiler trusts this assertion and updates currentStance.
 //
-// FIXED: The original only handled IdentifierExpr on the left side.
-//        Non-identifier left sides (ctrl->field = value) now fall through to
-//        general expression evaluation rather than being silently ignored.
 void SemanticAnalyzer::visit(AssignStmt* node) {
     if (isPassOne) return;
 
@@ -913,7 +905,7 @@ void SemanticAnalyzer::visit(AssignStmt* node) {
             error(targetIdent->token, "Assignment to undeclared variable '" + targetIdent->token.lexeme + "'.");
         }
 
-        // P0-1 FIX: Do NOT call evaluate(node->value.get()) here. 
+        // Do NOT call evaluate(node->value.get()) here. 
         // We only inspect the AST shape for stance transitions.
         auto* valIdent = dynamic_cast<IdentifierExpr*>(node->value.get());
         if (valIdent && !valIdent->stanceName.lexeme.empty()) {
@@ -1065,7 +1057,7 @@ bool SemanticAnalyzer::isLvalue(Expr* expr) const {
 void SemanticAnalyzer::visit(VarDeclStmt* node) {
     if (isPassOne) return;
 
-    // THE FIX (P2 Issue 7): Reserved Compiler Internals
+    // Reserved Compiler Internals
     if (node->name.lexeme.rfind("__", 0) == 0) {
         error(node->name, "Variable names beginning with '__' are reserved for Cgil compiler internals.");
     }
@@ -1081,11 +1073,11 @@ void SemanticAnalyzer::visit(VarDeclStmt* node) {
     if (node->initializer) {
         auto initType = evaluate(node->initializer.get());
         
-        // THE FIX: If initialized with a stance-prefixed struct, remember the stance!
+        // If initialized with a stance-prefixed struct, remember the stance!
         if (auto* structInit = dynamic_cast<StructInitExpr*>(node->initializer.get())) {
             initialStance = structInit->stanceName.lexeme;
         }
-        // STRIKE 6 FIX: If initialized with a pointer to a variable (&dev), inherit its stance!
+        // If initialized with a pointer to a variable (&dev), inherit its stance!
         // Without this, local pointers to hardware drop the typestate lock.
         else if (auto* addrOf = dynamic_cast<AddressOfExpr*>(node->initializer.get())) {
             if (auto* targetIdent = dynamic_cast<IdentifierExpr*>(addrOf->operand.get())) {
@@ -1131,7 +1123,7 @@ void SemanticAnalyzer::visit(BinaryExpr* node) {
     auto leftType = evaluate(node->left.get());
     std::shared_ptr<TypeInfo> rightType = nullptr;
 
-    // THE FIX: Do not evaluate the right side if this is member access!
+    // Do not evaluate the right side if this is member access!
     // For 'a->b' or 'a.b', 'b' is a field name, not a local variable.
     if (node->op.type != TokenType::ARROW && node->op.type != TokenType::DOT) {
         rightType = evaluate(node->right.get());
@@ -1146,13 +1138,6 @@ void SemanticAnalyzer::visit(BinaryExpr* node) {
             }
             // Member access: ctrl->sector_count, pkt.length
             //
-            // FATAL FIX 3: Return the FIELD's type, not the container's type.
-            //
-            // Before this fix, ctrl->sector_count returned TypeInfo{"Disk"},
-            // which is wrong. After this fix it returns TypeInfo{"soul16"}.
-            // This enables correct type checking on assignments, spell arguments,
-            // and arithmetic expressions involving member access.
-            //
             // SPECIAL CASE: ->stance / .stance
             //   The ->stance accessor is a reserved read of the __stance field.
             //   Its type is always soul16 (the discriminant type).
@@ -1166,14 +1151,27 @@ void SemanticAnalyzer::visit(BinaryExpr* node) {
             if (rightIdent && rightIdent->token.lexeme == "stance") {
                 // ->stance / .stance: always soul16 (the __stance discriminant)
                 currentExprType = typeRegistry.count("soul16")
-                    ? typeRegistry["soul16"]
+                    ? getBuiltinType("soul16")
                     : leftType;
             } else if (rightIdent && leftType && leftType->fields.count(rightIdent->token.lexeme)) {
                 // Actually extract and return the specific field's type!
                 currentExprType = leftType->fields[rightIdent->token.lexeme];
             } else if (leftType && leftType->kind == TypeKind::PRIMITIVE && !leftType->fields.empty()) {
-                // Reject unknown fields on registered primitives (like scroll)
-                error(node->token, "Unknown field '" + rightIdent->token.lexeme + "' on type '" + leftType->name + "'.");
+                if (rightIdent) {
+                    error(node->token,
+                          "Unknown field '" + rightIdent->token.lexeme +
+                          "' on type '" + leftType->name + "'. "
+                          "Valid fields: " + [&]() {
+                              std::string list;
+                              for (const auto& kv : leftType->fields)
+                                  list += "'" + kv.first + "' ";
+                              return list;
+                          }());
+                } else {
+                    error(node->token,
+                          "Member access on primitive type '" + leftType->name +
+                          "' requires a field name identifier.");
+                }
             } else {
                 // Fallback (undeclared fields default to container type to avoid crash)
                 currentExprType = leftType;
@@ -1193,22 +1191,35 @@ void SemanticAnalyzer::visit(BinaryExpr* node) {
         case TokenType::NEQ:
         case TokenType::GT:
         case TokenType::LT:
-        case TokenType::GEQ:      // P1 FIX
-        case TokenType::LEQ:      // P1 FIX
-        case TokenType::AMPAMP:   // P1 FIX
-        case TokenType::PIPEPIPE: // P1 FIX
+        case TokenType::GEQ:
+        case TokenType::LEQ:
+        case TokenType::AMPAMP:
+        case TokenType::PIPEPIPE:
             // Comparisons and logicals produce oath (boolean).
-            currentExprType = typeRegistry["oath"];
+            currentExprType = getBuiltinType("oath");
             break;
 
         case TokenType::PLUS:
         case TokenType::MINUS:
         case TokenType::STAR:
         case TokenType::SLASH:
-            // Arithmetic: result type is the left operand's type.
-            // V1.5 TODO: enforce both sides are numeric.
+        case TokenType::PERCENT: {
+            // ENFORCEMENT: Arithmetic is only valid for numeric primitives (mark, soul, addr, flow, rune).
+            // It is strictly illegal for sigils, legions, ranks, and scrolls.
+            bool leftValid = (leftType && leftType->kind == TypeKind::PRIMITIVE && leftType->name != "scroll" && leftType->name != "abyss");
+            bool rightValid = (rightType && rightType->kind == TypeKind::PRIMITIVE && rightType->name != "scroll" && rightType->name != "abyss");
+
+            if (!leftValid || !rightValid) {
+                error(node->op, 
+                      "Arithmetic operator '" + node->op.lexeme + "' is only valid for numeric types. " +
+                      "Cannot perform math on '" + (leftType ? leftType->name : "?") + 
+                      "' and '" + (rightType ? rightType->name : "?") + "'.");
+            }
+            
+            // Result type follows the left operand's type.
             currentExprType = leftType;
             break;
+        }
 
         case TokenType::PIPE:
             // | in expression context = Omen union (T | ruin<R>).
@@ -1231,7 +1242,6 @@ void SemanticAnalyzer::visit(UnaryExpr* node) {
     auto operandType = evaluate(node->operand.get());
 
     if (node->op.type == TokenType::STAR) {
-        // THE FIX: Unwrap pointer type
         if (operandType && operandType->elementType) {
             currentExprType = operandType->elementType;
         } else {
@@ -1253,10 +1263,6 @@ void SemanticAnalyzer::visit(UnaryExpr* node) {
 // For the semantic analyzer, we:
 //   1. Evaluate the operand and confirm it's an Omen.
 //   2. Set currentExprType to the Omen's successType (the unwrapped value).
-//
-// WARDEN CONSTRAINT: warden spells cannot propagate ruin.
-//   If ? is used inside a warden spell, it would propagate a ruin to hardware
-//   context, which is forbidden. V1.5 TODO: enforce this.
 void SemanticAnalyzer::visit(PostfixExpr* node) {
     if (isPassOne) return;
 
@@ -1316,7 +1322,6 @@ void SemanticAnalyzer::visit(PostfixExpr* node) {
     //   a) Emit the correct concrete typedef name for _tmp (not __auto_type fallback)
     //   b) Detect abyss Omens where __value does not exist in the union
     //   c) Emit the correct early-return path in the destined goto chain
-    // This is the fix for the Type Erasure bug identified in the pre-Phase-3 audit.
     node->resolvedOmenType = operandType;
 
     // Unwrap: the ? operator produces the SUCCESS type of the Omen.
@@ -1344,23 +1349,28 @@ void SemanticAnalyzer::visit(LiteralExpr* node) {
         case TokenType::INT_LIT:
             // Integer literals default to mark16 per spec.
             // The CodeGen and type-checking will widen or cast as needed.
-            currentExprType = typeRegistry["mark16"];
+            currentExprType = getBuiltinType("mark16");
+            break;
+
+        case TokenType::FLOAT_LIT:
+            // Floating point literals map to the 'flow' FPU type
+            currentExprType = getBuiltinType("flow");
             break;
 
         case TokenType::STRING_LIT:
             // String literals are Cgil_Scroll values.
-            currentExprType = typeRegistry["scroll"];
+            currentExprType = getBuiltinType("scroll");
             break;
 
         case TokenType::KEPT:
         case TokenType::FORSAKEN:
             // Boolean literals.
-            currentExprType = typeRegistry["oath"];
+            currentExprType = getBuiltinType("oath");
             break;
 
         default:
             // Fallback for any other literal-like token.
-            currentExprType = typeRegistry["mark16"];
+            currentExprType = getBuiltinType("mark16");
             break;
     }
 }
@@ -1379,7 +1389,6 @@ void SemanticAnalyzer::visit(LiteralExpr* node) {
 //
 //   RANK VARIANT REFERENCE (variantName set): e.g., DiskError::Timeout
 //     The rank type must exist. Returns a soul16 (the discriminant value).
-//     V1.5 TODO: Validate the variant name is actually in that rank.
 void SemanticAnalyzer::visit(IdentifierExpr* node) {
     if (isPassOne) return;
 
@@ -1425,7 +1434,7 @@ void SemanticAnalyzer::visit(IdentifierExpr* node) {
                   "Rank '" + node->token.lexeme + "' has no variant named '" + node->variantName.lexeme + "'.");
         }
 
-        currentExprType = typeRegistry["soul16"];
+        currentExprType = getBuiltinType("soul16");
         return;
     }
 
@@ -1439,7 +1448,8 @@ void SemanticAnalyzer::visit(IdentifierExpr* node) {
     // If this variable had ownership transferred away (passed with 'own'),
     // using it again is a compile error. The programmer must wait for
     // <~ to rebind it after a divine block.
-    if (sym->isOwned && sym->isMoved) {
+    // Enforce the move lock regardless of how the variable was declared!
+    if (sym->isMoved) {
         error(node->token,
               "Use-after-move: '" + sym->name + "' has been transferred with 'own' "
               "and cannot be used until ownership is rebound via '<~'.");
@@ -1460,9 +1470,6 @@ void SemanticAnalyzer::visit(IdentifierExpr* node) {
 //      The argument variable is then marked as moved (isMoved = true).
 //   5. For warden spells: own and ruin propagation are forbidden.
 //
-// FIXED: Added handling for ruin(...) call expressions, which appear in yield
-//        statements as error value construction. These are NOT spell calls —
-//        they are special syntax for building Omen error values.
 void SemanticAnalyzer::visit(CallExpr* node) {
     if (isPassOne) return;
 
@@ -1518,55 +1525,55 @@ void SemanticAnalyzer::visit(CallExpr* node) {
         auto argType  = evaluate(node->args[i].get());
         Param& param  = spell->params[i];
 
-        if (param.isPointer && !param.stanceName.lexeme.empty()) {
-            // This parameter requires the argument to be in a specific stance.
-            // We must unwrap AddressOfExpr (&my_disk) to find the actual variable.
-            
-            auto* argIdent = dynamic_cast<IdentifierExpr*>(node->args[i].get());
-            auto* addrOf = dynamic_cast<AddressOfExpr*>(node->args[i].get());
-            
-            // If it's &my_disk, look inside to grab the 'my_disk' identifier
-            if (addrOf) {
-                argIdent = dynamic_cast<IdentifierExpr*>(addrOf->operand.get());
-            }
-
-            // NOW we check if we successfully found an identifier
-            if (!argIdent) {
-                error(node->args[i]->token,
-                      "Parameter '" + param.name.lexeme + "' requires a sigil variable "
-                      "(not a complex expression) so its stance can be tracked.");
-            }
-
-            Symbol* argSym = symbols.lookup(argIdent->token.lexeme);
-
-            if (!argSym) {
-                error(node->args[i]->token, "Cannot resolve argument variable for stance check.");
-            }
-
-            // --- THE TYPESTATE LOCK ---
-            if (argSym->currentStance != param.stanceName.lexeme) {
-                error(node->args[i]->token,
-                      "Stance mismatch: spell '" + calleeName + "' requires '" +
-                      param.stanceName.lexeme + "' but '" + argSym->name +
-                      "' is currently '" + argSym->currentStance + "'. "
-                      "Cannot call this spell on hardware in the wrong state.");
-            }
-
-            // --- THE OWNERSHIP LOCK ---
-            if (param.isOwned) {
-                if (!node->argIsOwned[i]) {
-                    error(node->args[i]->token,
-                          "Parameter '" + param.name.lexeme + "' requires 'own'. "
-                          "Write: fetch_sector(own &my_disk, ...) to acknowledge the ownership transfer.");
+        if (param.isPointer) {
+            // Both Stance constraints AND Ownership constraints require us to 
+            // look at the actual variable being passed, so we must unwrap it.
+            if (!param.stanceName.lexeme.empty() || param.isOwned) {
+                
+                auto* argIdent = dynamic_cast<IdentifierExpr*>(node->args[i].get());
+                auto* addrOf = dynamic_cast<AddressOfExpr*>(node->args[i].get());
+                
+                // If it's &my_buf, look inside to grab the 'my_buf' identifier
+                if (addrOf) {
+                    argIdent = dynamic_cast<IdentifierExpr*>(addrOf->operand.get());
                 }
-                // Transfer ownership. The variable is now inaccessible until <~ rebinds it.
-                argSym->isMoved = true;
+
+                if (!argIdent) {
+                    error(node->args[i]->token,
+                          "Parameter '" + param.name.lexeme + "' requires a plain variable "
+                          "(not a complex expression) so its state and ownership can be tracked.");
+                }
+
+                Symbol* argSym = symbols.lookup(argIdent->token.lexeme);
+                if (!argSym) {
+                    error(node->args[i]->token, "Cannot resolve argument variable for typestate tracking.");
+                }
+
+                // --- THE TYPESTATE LOCK ---
+                if (!param.stanceName.lexeme.empty()) {
+                    if (argSym->currentStance != param.stanceName.lexeme) {
+                        error(node->args[i]->token,
+                              "Stance mismatch: spell '" + calleeName + "' requires '" +
+                              param.stanceName.lexeme + "' but '" + argSym->name +
+                              "' is currently '" + argSym->currentStance + "'.");
+                    }
+                }
+
+                // --- THE OWNERSHIP LOCK ---
+                if (param.isOwned) {
+                    if (!node->argIsOwned[i]) {
+                        error(node->args[i]->token,
+                              "Parameter '" + param.name.lexeme + "' requires 'own'. "
+                              "Write: " + calleeName + "(own &" + argSym->name + ") to acknowledge the transfer.");
+                    }
+                    // Transfer ownership. The variable is now inaccessible until <~ rebinds it.
+                    argSym->isMoved = true;
+                }
             }
         }
     }
 
-    // Determine the return type.
-    // CRITICAL (Landmine 3 fix + Type Erasure fix):
+    // Determine the return type:
     //
     //   TUPLE return (multiple elements):
     //     Produces TypeKind::TUPLE with tupleElements populated.
@@ -1600,7 +1607,7 @@ void SemanticAnalyzer::visit(CallExpr* node) {
 
         if (spell->hasOmen && !tupleType->tupleElements.empty()) {
             auto omenType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::OMEN, "Omen"});
-            // THE FIX (BUG 4): Propagate the success type into the Omen!
+            // Propagate the success type into the Omen!
             omenType->successType = tupleType->tupleElements.back();
             tupleType->tupleElements.back() = omenType;
         }
@@ -1611,7 +1618,7 @@ void SemanticAnalyzer::visit(CallExpr* node) {
         // Single-element Omen: scroll | ruin<E>
         auto omenType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::OMEN, "Omen"});
         
-        // THE FIX (BUG 4): Extract actual success type to prevent soul16/auto fallback
+        // Extract actual success type to prevent soul16/auto fallback
         if (!spell->returnTypes.empty()) {
             auto retIt = typeRegistry.find(spell->returnTypes[0].typeToken.lexeme);
             if (retIt != typeRegistry.end()) {
@@ -1624,9 +1631,9 @@ void SemanticAnalyzer::visit(CallExpr* node) {
 
     } else if (!spell->returnTypes.empty()) {
         auto retIt = typeRegistry.find(spell->returnTypes[0].typeToken.lexeme);
-        currentExprType = (retIt != typeRegistry.end()) ? retIt->second : typeRegistry["abyss"];
+        currentExprType = (retIt != typeRegistry.end()) ? retIt->second : getBuiltinType("abyss");
     } else {
-        currentExprType = typeRegistry["abyss"];
+        currentExprType = getBuiltinType("abyss");
     }
 }
 
@@ -1656,17 +1663,17 @@ void SemanticAnalyzer::visit(AddressOfExpr* node) {
     if (ident) {
         Symbol* sym = symbols.lookup(ident->token.lexeme);
         if (sym && sym->isHardware) {
-            currentExprType = typeRegistry["addr"];
+            currentExprType = getBuiltinType("addr");
             return;
         }
-        // THE FIX (P2 Issue 6): Ownership Escape Prevention
+        // Ownership Escape Prevention
         if (sym && sym->isOwned) {
             error(node->token, "Cannot take the address of an 'own' pointer — this creates an alias that bypasses ownership typestate tracking.");
         }
     }
 
     // Regular address-of: &my_disk -> pointer to the variable.
-    // THE FIX: Wrap the operand's type in a pointer TypeInfo
+    // Wrap the operand's type in a pointer TypeInfo
     auto ptrType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::PRIMITIVE, operandType->name + "*"});
     ptrType->elementType = operandType; // Store the pointee type for unwrapping
     currentExprType = ptrType;
@@ -1677,9 +1684,6 @@ void SemanticAnalyzer::visit(AddressOfExpr* node) {
 //   1. The target is an array-like type (deck variable, leyline of array type).
 //   2. The index is an integer-compatible type.
 //   3. Returns the element type of the array.
-//
-// V1: Type checking is simplified — we evaluate both sides and return mark16.
-// V1.5 TODO: Track element types on array TypeInfos and return the correct type.
 void SemanticAnalyzer::visit(IndexExpr* node) {
     if (isPassOne) return;
 
@@ -1687,7 +1691,7 @@ void SemanticAnalyzer::visit(IndexExpr* node) {
     auto indexType  = evaluate(node->index.get());
     (void)indexType;
 
-    // THE FIX (1A): Return the actual element type so field access works
+    // Return the actual element type so field access works
     if (targetType && targetType->elementType) {
         currentExprType = targetType->elementType;
         return;
@@ -1695,7 +1699,7 @@ void SemanticAnalyzer::visit(IndexExpr* node) {
 
     // Fallback for unknown arrays
     currentExprType = typeRegistry.count("mark16")
-        ? typeRegistry["mark16"]
+        ? getBuiltinType("mark16")
         : std::make_shared<TypeInfo>(TypeInfo{TypeKind::PRIMITIVE, "mark16"});
 }
 // Struct/sigil initializer: Device:Idle { device_id: 0, error_code: 0, flags: 0 }
@@ -1703,7 +1707,7 @@ void SemanticAnalyzer::visit(IndexExpr* node) {
 // Validates:
 //   1. The type name refers to a declared sigil or legion.
 //   2. If a stance prefix is present, the stance belongs to that sigil.
-//   3. All field names exist on the sigil (V1.5 TODO).
+//   3. All field names exist on the sigil.
 //   4. All field values evaluate without error.
 //
 // Produces: the sigil's TypeInfo as the expression type.
@@ -1765,7 +1769,7 @@ void SemanticAnalyzer::visit(AssignExpr* node) {
     auto targetType = evaluate(node->target.get());
     auto valueType  = evaluate(node->value.get());
     
-    // --- THE FIX: Strict Assignment Check ---
+    // --- Strict Assignment Check ---
     if (!isAssignmentCompatible(targetType, valueType)) {
         error(node->op,
               "Type mismatch in expression: cannot implicitly assign '" +
@@ -1793,7 +1797,7 @@ void SemanticAnalyzer::visit(CastExpr* node) {
         error(node->targetType, "Cannot cast to sigil type '" + targetType->name + "'.");
     }
 
-    // THE FIX: Wrap the type if casting to a pointer
+    // Wrap the type if casting to a pointer
     if (node->isPointer) {
         auto ptrType = std::make_shared<TypeInfo>(TypeInfo{TypeKind::PRIMITIVE, targetType->name + "*"});
         ptrType->elementType = targetType;

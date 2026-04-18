@@ -31,9 +31,6 @@ std::vector<std::unique_ptr<Decl>> Parser::parse() {
 // =============================================================================
 
 // Routes to the right declaration parser based on the keyword we see.
-// FIXED: Now handles rank, legion, grimoire, and pact — these were missing
-// from the original and would have caused a parse error on every .gil file
-// that used them (which is every file in the spec example).
 std::unique_ptr<Decl> Parser::parseDeclaration() {
     if (match({TokenType::GRIMOIRE, TokenType::PACT}))
         return parseGrimoireDecl();
@@ -58,13 +55,9 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
 //
 // The previous() token on entry is GRIMOIRE or PACT (consumed by match()).
 // isPact distinguishes them for the semantic analyzer (pact = Ring 3 warning).
-//
-// NOTE: For V1, header paths like "hardware_defs.h" are lexed as
-// IDENT DOT IDENT. We consume only the first IDENT for simplicity.
-// A production-quality implementation would collect all tokens up to '>'.
 std::unique_ptr<GrimoireDecl> Parser::parseGrimoireDecl() {
     auto node = std::make_unique<GrimoireDecl>();
-    node->token  = previous();                                // grimoire or pact token
+    node->token  = previous(); // grimoire or pact token
     node->isPact = (previous().type == TokenType::PACT);
 
     if (check(TokenType::STRING_LIT)) {
@@ -121,7 +114,7 @@ std::unique_ptr<RankDecl> Parser::parseRankDecl() {
 //
 // Inside the sigil body we can encounter:
 //   - 'stance' keyword  -> a typestate declaration
-//   - 'spell' keyword   -> a bound method (V1.5 encapsulation feature)
+//   - 'spell' keyword   -> a bound method
 //   - anything else     -> a data field (type + name)
 //
 // Stances and fields are stored in declaration order because the CodeGen must
@@ -191,7 +184,7 @@ std::unique_ptr<LegionDecl> Parser::parseLegionDecl() {
 // isTopLevel: true  = standalone spell at file scope
 //             false = bound spell inside a sigil body
 //
-// FIXED: Default argument (bool isTopLevel = true) is in the DECLARATION
+// Default argument (bool isTopLevel = true) is in the DECLARATION
 // (Parser.h), not in this definition. In C++, default arguments must be
 // in the declaration, not the definition. Having it here previously caused
 // a signature mismatch that prevented compilation.
@@ -235,7 +228,7 @@ std::unique_ptr<SpellDecl> Parser::parseSpellDecl(bool /*isTopLevel*/) {
                 // Primitive type: addr target, scroll msg, mark16 x, etc.
                 p.type = consumeType("Expected a valid parameter type.");
                 
-                // THE FIX: Allow primitive pointers (e.g., mark16* target_ptr)
+                // Allow primitive pointers (e.g., mark16* target_ptr)
                 if (match({TokenType::STAR})) {
                     p.isPointer = true;
                 } else {
@@ -256,10 +249,7 @@ std::unique_ptr<SpellDecl> Parser::parseSpellDecl(bool /*isTopLevel*/) {
     if (match({TokenType::LPAREN})) {
         // Tuple return: (sigil* Disk, scroll | ruin<DiskError>)
         //
-        // FIX 2: Tuple-Omen Collision.
-        // The last element of a tuple may be followed by `| ruin<Rank>`.
-        // Previously the loop hit `|` and crashed expecting `)`.
-        // Now: after parsing each element type, check for `|`. If found,
+        // After parsing each element type, check for `|`. If found,
         // consume the omen suffix, set hasOmen, and break — the omen
         // terminates the tuple element list.
         do {
@@ -407,7 +397,7 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         return parseVarDeclStmt(typeToken);
     }
     
-    // THE FIX (BUG 3): Lookahead for: Device* ptr = ...;
+    // Lookahead for: Device* ptr = ...;
     if (check(TokenType::IDENT) &&
         peekNext().type == TokenType::STAR &&
         (current + 2 < (int)tokens.size()) &&
@@ -453,7 +443,7 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     //   peekNext()        = REV_WEAVE  (<~)
     //   tokens[current+2] = DIVINE
     //
-    // FIXED: Added bounds check (current + 2 < tokens.size()) before accessing
+    // Added bounds check (current + 2 < tokens.size()) before accessing
     // tokens[current + 2]. Without this, accessing past the end of the vector
     // is undefined behavior and can crash the compiler.
     if (check(TokenType::IDENT) &&
@@ -587,7 +577,7 @@ std::unique_ptr<WhirlStmt> Parser::parseWhirlStmt() {
 // by scanning the parent spell for destined blocks during emission.
 // yield (ctrl, data);   yield 0;   yield;
 //
-// FIXED: Uses lookahead to distinguish between a tuple yield (which contains a comma)
+// Uses lookahead to distinguish between a tuple yield (which contains a comma)
 // and a parenthesized single-value yield (e.g., yield (a + b) * c;).
 std::unique_ptr<YieldStmt> Parser::parseYieldStmt() {
     auto node = std::make_unique<YieldStmt>();
@@ -634,7 +624,7 @@ std::unique_ptr<YieldStmt> Parser::parseYieldStmt() {
 // destined (condition) { cleanup_body; }
 // destined { cleanup_body; }            <- condition is OPTIONAL
 //
-// FIXED: The original parser always did consume(LPAREN) which would crash
+// The original parser always did consume(LPAREN) which would crash
 // on the conditionless form. The spec explicitly states the condition is
 // optional. We now check whether '(' or '{' follows and behave accordingly.
 std::unique_ptr<DestinedStmt> Parser::parseDestinedStmt() {
@@ -663,7 +653,7 @@ std::unique_ptr<DestinedStmt> Parser::parseDestinedStmt() {
 //     (ctrl, ruin err)                       => { ... }
 // }
 //
-// FIXED: DivineBranch now uses distinct fields for each branch kind instead
+// DivineBranch now uses distinct fields for each branch kind instead
 // of reusing payloadVar for both the variant name and the error variable.
 // This eliminates the ambiguity that would have caused silent semantic bugs.
 std::unique_ptr<DivineStmt> Parser::parseDivineStmt() {
@@ -687,11 +677,10 @@ std::unique_ptr<DivineStmt> Parser::parseDivineStmt() {
         // First element: the ownership rebinding variable (always present)
         branch.ownerVar = consume(TokenType::IDENT, "Expected ownership variable (e.g., 'ctrl').");
 
-        // FIX — Ghost Variable trap:
-        //   If ')' follows immediately, this is a payloadless success branch: (ctrl) => { }
-        //   This is the correct syntax for 'abyss | ruin<T>' omens where the success
-        //   carries no data. Parsing a payload token here would create a ghost variable —
-        //   a name registered in the symbol table but never declared in the generated C.
+        // If ')' follows immediately, this is a payloadless success branch: (ctrl) => { }
+        // This is the correct syntax for 'abyss | ruin<T>' omens where the success
+        // carries no data. Parsing a payload token here would create a ghost variable —
+        // a name registered in the symbol table but never declared in the generated C.
         if (check(TokenType::RPAREN)) {
             branch.isRuin        = false;
             branch.isPayloadless = true;
@@ -828,8 +817,9 @@ std::unique_ptr<Expr> Parser::parsePrecedence(int minPrecedence) {
     // --- PREFIX RULES: What can START an expression? ---
     switch (tok.type) {
 
-        // Integer and string literals: 0x1F7, 42, "Drive dead"
+        // Integer, float, and string literals: 0x1F7, 42, 3.14, "Drive dead"
         case TokenType::INT_LIT:
+        case TokenType::FLOAT_LIT:
         case TokenType::STRING_LIT:
             left = std::make_unique<LiteralExpr>(tok);
             break;
@@ -887,7 +877,7 @@ std::unique_ptr<Expr> Parser::parsePrecedence(int minPrecedence) {
         // Pointer dereference: *ptr
         case TokenType::MINUS:
         case TokenType::STAR:
-        case TokenType::TILDE:  // P1 FIX
+        case TokenType::TILDE:
             left = std::make_unique<UnaryExpr>(tok, parsePrecedence(90));
             break;
 
@@ -911,7 +901,7 @@ std::unique_ptr<Expr> Parser::parsePrecedence(int minPrecedence) {
             consume(TokenType::LT, "Expected '<' after 'cast'.");
             Token targetType = consumeType("Expected a valid target type inside 'cast<...>'.");
             
-            // THE FIX: Check for optional pointer modifier
+            // Check for optional pointer modifier
             bool isPtr = false;
             if (check(TokenType::STAR)) {
                 advance(); // Consume the '*'
@@ -1119,7 +1109,7 @@ Token Parser::peek() const {
 // Return the token one position ahead without consuming either token.
 // Used in parseStatement() to detect the 'IDENT <~ divine' pattern.
 //
-// FIXED: Returns the last token in the stream (END_OF_FILE) if we are at or
+// Returns the last token in the stream (END_OF_FILE) if we are at or
 // past the end, rather than accessing tokens[current + 1] unchecked. This
 // prevents undefined behavior when peekNext() is called near the end of file.
 Token Parser::peekNext() const {
@@ -1243,7 +1233,7 @@ Token Parser::consumeType(const std::string& message) {
 //   - A keyword that starts a new top-level declaration
 //
 // This allows the parser to report multiple errors in one compiler run instead
-// of stopping at the very first mistake. FIXED: Added RANK, LEGION, GRIMOIRE,
+// of stopping at the very first mistake.
 // PACT to the synchronize keyword set to match the full Cgil declaration set.
 void Parser::synchronize() {
     advance(); // Skip the token that triggered the error

@@ -136,7 +136,7 @@ private:
     int indentLevel = 0;     // Current indentation depth (each level = 4 spaces)
 
     // Which of the three generation phases is currently active?
-    // FIXED: Initialized to TYPES (previously uninitialized — undefined behavior).
+    // Initialized to TYPES.
     enum class Phase { TYPES, PROTOTYPES, IMPLEMENTATIONS };
     Phase currentPhase = Phase::TYPES;
 
@@ -162,7 +162,7 @@ private:
         cTypeMap["addr"]   = "uint16_t";    // 16-bit hardware address
         cTypeMap["rune"]   = "uint8_t";     // 8-bit byte
         cTypeMap["oath"]   = "uint8_t";     // boolean (kept=1, forsaken=0)
-        cTypeMap["flow"]   = "float";       // FIXED: was missing — any use of 'flow' was broken
+        cTypeMap["flow"]   = "float";
         cTypeMap["abyss"]  = "void";
         cTypeMap["scroll"] = "Cgil_Scroll"; // fat pointer struct
         cTypeMap["deck"]   = "uint8_t";     // deck[N] T emitted as T[N] — 'deck' itself unused
